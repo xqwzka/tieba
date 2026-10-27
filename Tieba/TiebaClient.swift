@@ -178,9 +178,11 @@ final class TiebaClient {
         return result
     }
 
-    // MARK: - 帖子详情（客户端接口未验证通过：匿名和登录后均报删帖）
-    // 主路径：先试客户端接口，失败即返回空并让 UI 自动切网页版详情（官方页面，已验证能看到楼层）。
-    // 这里不把客户端报错伪装成帖子已删，调用方按空结果处理。
+    // MARK: - 帖子详情（已验证通过，2026-10-27 只读实测）
+    // 根因：之前一直发 tid 参数，服务端不认，报删帖。TiebaLite 的写法是 kz=帖子 id：
+    // 匿名 GET kz=11140407932 已实测返回 error_code 0、post_list 15 条（1~15 楼），
+    // 首楼作者经 user_list 映射为“萌酱”，与网页版一致。主路径仍是客户端接口，
+    // 失败才由 UI 切网页版详情，不把报错伪装成帖子已删。
 
     func fetchPosts(tid: String, page: Int) async throws -> [TiebaPost] {
         guard !tid.isEmpty else {
@@ -190,15 +192,16 @@ final class TiebaClient {
         if let (at, cached) = postsCache[cacheKey], Date().timeIntervalSince(at) < 60 {
             return cached
         }
-        let variants: [[String: String]] = [
-            ["tid": tid, "pn": String(page)],
-            ["tid": tid, "pn": String(page), "rn": "30", "with_floor": "1"],
-            ["tid": tid, "pn": String(page), "kz": "1"],
+        // 第一组就是实测通过的参数；第二组是 TiebaLite 老 JSON 详情的完整参数（POST 表单），作兜底。
+        let attempts: [(method: String, params: [String: String])] = [
+            ("GET", ["kz": tid, "pn": String(page), "rn": "30", "with_floor": "1"]),
+            ("POST", ["kz": tid, "pn": String(page), "rn": "30", "with_floor": "1",
+                      "st_type": "tb_frslist", "back": "0", "floor_rn": "3", "mark": "0", "lz": "0"]),
         ]
         var lastError: Error = TiebaError.invalidResponse
-        for params in variants {
+        for attempt in attempts {
             do {
-                let data = try await request(path: "/c/f/pb/page", params: params, method: "GET")
+                let data = try await request(path: "/c/f/pb/page", params: attempt.params, method: attempt.method)
                 let response = try decode(data, as: PbResponse.self)
                 var posts = response.postList ?? []
                 applyUsers(response.userList, to: &posts)
@@ -210,23 +213,12 @@ final class TiebaClient {
                 lastError = error
             }
         }
-        if page == 1 {
-            do {
-                let data = try await request(path: "/c/f/pb/page", params: ["tid": tid, "pn": "1", "rn": "30", "with_floor": "1"], method: "POST")
-                let response = try decode(data, as: PbResponse.self)
-                if let posts = response.postList, !posts.isEmpty {
-                    postsCache[cacheKey] = (Date(), posts)
-                    return posts
-                }
-            } catch {
-                lastError = error
-            }
-        }
         throw lastError
     }
 
     func fetchSubPosts(tid: String, pid: String, page: Int) async throws -> [TiebaSubPost] {
-        let data = try await request(path: "/c/f/pb/floor", params: ["tid": tid, "pid": pid, "pn": String(page)], method: "GET")
+        // 楼中楼同理：TiebaLite 用 kz=帖子 id + pid，POST 表单；之前 tid + GET 未验证通过。
+        let data = try await request(path: "/c/f/pb/floor", params: ["kz": tid, "pid": pid, "pn": String(page), "rn": "20"], method: "POST")
         let response = try decode(data, as: FloorResponse.self)
         var subs = response.subpostList ?? []
         if let users = response.userList, !users.isEmpty {

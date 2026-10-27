@@ -190,7 +190,7 @@ struct TiebaPost: Identifiable, Decodable {
     var imageURLs: [String] { content.filter { $0.type == 3 }.map { $0.originSrc }.filter { !$0.isEmpty } }
 
     enum CodingKeys: String, CodingKey {
-        case pid, floor, author, time, content
+        case pid, floor, author, time, content, title
         case subPostCount = "sub_post_number", authorId = "author_id"
     }
 
@@ -212,13 +212,20 @@ struct TiebaPost: Identifiable, Decodable {
         self.authorId = authorId
         self.authorPortrait = authorPortrait
         time = container.flexibleInt(forKey: .time)
+        let parsedContent: [ContentFragment]
         if let fragments = try? container.decode([ContentFragment].self, forKey: .content) {
-            content = fragments
+            parsedContent = fragments
         } else if let text = try? container.decode(String.self, forKey: .content), !text.isEmpty {
-            content = [ContentFragment(type: 0, text: text, originSrc: "")]
+            parsedContent = [ContentFragment(type: 0, text: text, originSrc: "")]
         } else {
-            content = []
+            parsedContent = []
         }
+        // 首楼在实测返回里可能没有 content 数组，只有 title（与帖子标题同文）；
+        // 此时用 title 兜底，否则首楼正文会显示空白。
+        let title = container.flexibleString(forKey: .title)
+        content = parsedContent.isEmpty && !title.isEmpty
+            ? [ContentFragment(type: 0, text: title, originSrc: "")]
+            : parsedContent
         subPostCount = container.flexibleInt(forKey: .subPostCount)
     }
 }
