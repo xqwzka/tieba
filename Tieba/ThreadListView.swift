@@ -116,6 +116,10 @@ struct ThreadListView: View {
                 }
             }
             .listStyle(.plain)
+            .refreshable {
+                // 下拉刷新绕过 60 秒缓存，直接向服务端要最新列表。
+                await refreshNow()
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .alert("请先登录", isPresented: $showLoginAlert) {
@@ -149,6 +153,22 @@ struct ThreadListView: View {
     private func loadMore() {
         guard !isLoadingMore, !noMore else { return }
         load(page: currentPage + 1, replace: false)
+    }
+
+    private func refreshNow() async {
+        errorMessage = nil
+        do {
+            let result = try await TiebaClient.shared.fetchThreads(forumName: forumName, page: 1, force: true)
+            forumId = result.forumId
+            threads = result.threads
+            currentPage = 1
+            noMore = result.threads.isEmpty
+            if result.threads.isEmpty {
+                errorMessage = "这个吧暂无帖子"
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func load(page: Int, replace: Bool) {

@@ -62,6 +62,10 @@ struct ThreadDetailView: View {
                     PostRow(post: post, tid: thread.tid, forumId: forumId, forumName: forumName)
                 }
             }
+            .refreshable {
+                // 下拉刷新绕过 60 秒缓存，直接向服务端要最新楼层。
+                await refreshNow()
+            }
             if !posts.isEmpty && !noMore {
                 Button(isLoadingMore ? "加载中…" : "加载更多楼层") {
                     loadMore()
@@ -117,6 +121,18 @@ struct ThreadDetailView: View {
     private func loadMore() {
         guard !isLoadingMore, !noMore else { return }
         load(page: currentPage + 1, replace: false)
+    }
+
+    private func refreshNow() async {
+        errorMessage = nil
+        do {
+            let fetched = try await TiebaClient.shared.fetchPosts(tid: thread.tid, page: 1, force: true)
+            posts = fetched
+            currentPage = 1
+            noMore = fetched.isEmpty
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func load(page: Int, replace: Bool) {

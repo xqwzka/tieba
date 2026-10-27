@@ -172,9 +172,9 @@ final class TiebaClient {
 
     // MARK: - 帖子列表（已验证通过）
 
-    func fetchThreads(forumName: String, page: Int) async throws -> ForumThreads {
+    func fetchThreads(forumName: String, page: Int, force: Bool = false) async throws -> ForumThreads {
         let cacheKey = "\(forumName)#\(page)"
-        if let (at, cached) = threadsCache[cacheKey], Date().timeIntervalSince(at) < 60 {
+        if !force, let (at, cached) = threadsCache[cacheKey], Date().timeIntervalSince(at) < 60 {
             return cached
         }
         let data = try await request(path: "/c/f/frs/page", params: ["kw": forumName, "pn": String(page)], method: "GET")
@@ -195,12 +195,12 @@ final class TiebaClient {
     // 首楼作者经 user_list 映射为“萌酱”，与网页版一致。主路径仍是客户端接口，
     // 失败才由 UI 切网页版详情，不把报错伪装成帖子已删。
 
-    func fetchPosts(tid: String, page: Int) async throws -> [TiebaPost] {
+    func fetchPosts(tid: String, page: Int, force: Bool = false) async throws -> [TiebaPost] {
         guard !tid.isEmpty else {
             throw TiebaError.server("帖子 id 为空，请回到列表重新打开这条帖子")
         }
         let cacheKey = "\(tid)#\(page)"
-        if let (at, cached) = postsCache[cacheKey], Date().timeIntervalSince(at) < 60 {
+        if !force, let (at, cached) = postsCache[cacheKey], Date().timeIntervalSince(at) < 60 {
             return cached
         }
         // 实测结论：rn=30 时服务端翻页不生效，pn=2、pn=3 都返回从 1 楼起的全部楼层，
@@ -419,6 +419,8 @@ final class TiebaClient {
         defer { writeInFlight = false }
         let tbs = try await fetchTBS()
         _ = try await request(path: "/c/c/thread/add", params: ["fid": forumId, "kw": forumName, "title": title, "content": content, "tbs": tbs], method: "POST")
+        // 发新帖成功后清掉该吧的列表缓存，否则列表 60 秒内还是旧数据。
+        threadsCache.keys.filter { $0.hasPrefix("\(forumName)#") }.forEach { threadsCache.removeValue(forKey: $0) }
     }
 
     // 发帖/回复走 protobuf 接口（TiebaLite 现行做法）：
@@ -432,7 +434,23 @@ final class TiebaClient {
             fid: forumId, kw: forumName, tid: tid, content: content,
             postId: postId, replyUid: replyUid)
         let (body, contentType) = TiebaProtobuf.multipartBody(stoken: KeychainStore.stoken, protobuf: protobuf)
-        guard let url = URL(string: "https://tiebac.baidu.com/c/c/post/add?cmd=309731&format=protobuf&_client_version=12.35.1.0") else {
+        // 关键修正：TiebaLite 的 protobuf 实例经默认拦截器在 URL 上带 BDUSS/STOKEN/
+        // _client_type/_timestamp；上一版只把 BDUSS 放进 protobuf 体和 Cookie，
+        // 服务端不认登录态，回复报“用户未登录或登录失败”。这些是会话参数，不是设备指纹。
+        var components = URLComponents(string: "https://tiebac.baidu.com/c/c/post/add")!
+        var queryItems = [
+            URLQueryItem(name: "cmd", value: "309731"),
+            URLQueryItem(name: "format", value: "protobuf"),
+            URLQueryItem(name: "_client_version", value: "12.35.1.0"),
+            URLQueryItem(name: "BDUSS", value: bduss),
+            URLQueryItem(name: "_client_type", value: "2"),
+            URLQueryItem(name: "_timestamp", value: String(Int64(Date().timeIntervalSince1970 * 1000))),
+        ]
+        if let stoken = KeychainStore.stoken, !stoken.isEmpty {
+            queryItems.append(URLQueryItem(name: "STOKEN", value: stoken))
+        }
+        components.queryItems = queryItems
+        guard let url = components.url else {
             throw TiebaError.invalidResponse
         }
         var urlRequest = URLRequest(url: url)
