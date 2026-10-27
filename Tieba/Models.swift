@@ -190,13 +190,17 @@ struct TiebaPost: Identifiable, Decodable {
     var imageURLs: [String] { content.filter { $0.type == 3 }.map { $0.originSrc }.filter { !$0.isEmpty } }
 
     enum CodingKeys: String, CodingKey {
-        case pid, floor, author, time, content, title
+        case pid, floor, author, time, content, title, id
         case subPostCount = "sub_post_number", authorId = "author_id"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        pid = container.flexibleString(forKey: .pid)
+        // pb 的楼层 id 字段是 id，不是 pid（TiebaLite 的 PostListItemBean 也是 id）。
+        // 之前只读 pid，全部楼层的 pid 都是空，SwiftUI ForEach 靠 id 区分行，
+        // id 全空就把首楼重复渲染成每一行——视频里全是 1 楼就是这么来的。
+        let rawPid = container.flexibleString(forKey: .pid)
+        pid = !rawPid.isEmpty ? rawPid : container.flexibleString(forKey: .id)
         floor = container.flexibleInt(forKey: .floor)
         var authorName = "未知用户"
         var authorId = container.flexibleString(forKey: .authorId)
@@ -239,13 +243,15 @@ struct TiebaSubPost: Identifiable, Decodable {
     let contentText: String
 
     enum CodingKeys: String, CodingKey {
-        case pid, author, time, content
+        case pid, author, time, content, id
         case authorId = "author_id"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        pid = container.flexibleString(forKey: .pid)
+        // 楼中楼条目同理：id 字段，不是 pid。
+        let rawPid = container.flexibleString(forKey: .pid)
+        pid = !rawPid.isEmpty ? rawPid : container.flexibleString(forKey: .id)
         var authorName = "未知用户"
         var authorId = container.flexibleString(forKey: .authorId)
         if let author = try? container.decode(AuthorInfo.self, forKey: .author) {
