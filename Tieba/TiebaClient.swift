@@ -119,7 +119,7 @@ final class TiebaClient {
 
     private func decode<T: Decodable>(_ data: Data, as type: T.Type) throws -> T {
         do {
-            return try JSONDecoder().decode(T.self)
+            return try JSONDecoder().decode(type, from: data)
         } catch {
             throw TiebaError.invalidResponse
         }
