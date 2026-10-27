@@ -35,7 +35,9 @@ xcodebuild -project Tieba.xcodeproj -scheme Tieba -sdk iphoneos \
 以下均未在本机验证（本机无 Xcode、无真机），按可能性排序，真机联调时先查这几处：
 
 1. **原生扫码**：`passport.baidu.com/v2/api/getqrcode` 的返回格式和 `channel/unicast?channel_id=<sign>` 轮询返回里是否真的直接带有 BDUSS（JSON 或 Set-Cookie）。2026-10-27 真机已报一次“返回数据无法解析”，修复后失败会显示服务端原返回前 200 字，凭那段文字才能确定是参数、Cookie 还是字段名的问题。如果原生扫码仍失败，直接用「网页扫码（百度官方二维码）」登录——它直接读网页 Cookie，不依赖接口返回格式。
-2. **发帖签名与 tbs**：`c/c/thread/add`、`c/c/post/add`、`c/c/comment/add` 的签名算法（参数按 key 排序拼 `key=value` 后加 `tiebaclient!!!` 再 MD5）与 `dc/common/tbs` 返回的 tbs 是否仍被当前服务端接受。签名或 tbs 一变，发帖会直接报服务端原错，界面会原样显示。
-3. **帖子/楼层字段名**：`c/f/frs/page`、`c/f/pb/page`、`c/f/pb/floor` 的 `thread_list`、`post_list`、`subpost_list` 结构与作者、时间、内容片段（type 0 文字、type 3 图片 `origin_src`）字段是否与代码假设一致。解析已做防御处理（缺失字段用默认值，不崩溃），但字段名一旦改名，列表可能出现空白或缺内容。
-4. **风控**：新号、高频发帖、敏感词可能触发验证码、删帖或封号。发帖失败时界面显示的是服务端原错，按原错处理，不要反复重试。
-5. **只看楼主**：本地按作者名与帖子作者名相等过滤，若服务端返回的作者名格式不一致（如昵称与用户名混用），过滤可能漏楼层。
+2. **帖子详情必须登录后看（2026-10-27 实测）**：匿名请求 `c/f/pb/page` 对两条帖子（含吧公告帖）都返回 350004“帖子可能已被删除”，不是帖子真的被删；不带 sign 则返回 110001。详情页未登录时会先提示这一点。已登录后详情仍报 350004 的话，把详情页显示的 tid 发回来再查（可能还缺服务端要的设备/鉴权字段）。
+3. **作者名靠 user_list 映射（2026-10-27 实测）**：`frs` 的 thread 条目里 author 对象只有 show_icon_list、没有用户名，用户名在顶层 user_list 里按 author_id 映射，字段是 name_show（name 也可能同值）。代码已按此映射，楼层/楼中楼同理。
+4. **发帖签名与 tbs**：`c/c/thread/add`、`c/c/post/add`、`c/c/comment/add` 的签名算法（参数按 key 排序拼 `key=value` 后加 `tiebaclient!!!` 再 MD5）与 `dc/common/tbs` 返回的 tbs 是否仍被当前服务端接受。签名或 tbs 一变，发帖会直接报服务端原错，界面会原样显示。
+5. **帖子/楼层字段名**：`c/f/frs/page`、`c/f/pb/page`、`c/f/pb/floor` 的 `thread_list`、`post_list`、`subpost_list` 结构与作者、时间、内容片段（type 0 文字、type 3 图片 `origin_src`）字段是否与代码假设一致。解析已做防御处理（缺失字段用默认值，不崩溃），但字段名一旦改名，列表可能出现空白或缺内容。pb 的 post 字段尚未实测到（匿名请求拿不到 post_list），登录后若楼层仍空白，按详情页 tid 再查。
+6. **风控**：新号、高频发帖、敏感词可能触发验证码、删帖或封号。发帖失败时界面显示的是服务端原错，按原错处理，不要反复重试。
+7. **只看楼主**：优先按作者 id 过滤，id 为空时退回按作者名；若服务端返回的作者名格式不一致（如昵称与用户名混用），过滤可能漏楼层。

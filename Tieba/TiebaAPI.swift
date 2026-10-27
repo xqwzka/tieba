@@ -67,15 +67,28 @@ struct ForumInfo: Decodable {
 }
 
 struct AuthorInfo: Decodable {
+    let id: String
     let name: String
 
-    enum CodingKeys: String, CodingKey { case name, userName = "user_name" }
+    enum CodingKeys: String, CodingKey {
+        case id, name, userName = "user_name", userId = "user_id", uid, nickname, showNickname = "show_nickname", nameShow = "name_show"
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = container.flexibleString(forKey: .id)
+        let userId = container.flexibleString(forKey: .userId)
+        let uid = container.flexibleString(forKey: .uid)
+        self.id = !id.isEmpty ? id : (!userId.isEmpty ? userId : uid)
+        // 实测：frs 的 user_list 里用户名在 name_show（name 也可能同值），
+        // 而 thread 条目里的 author 对象只有 show_icon_list、没有用户名，
+        // 所以用户名必须靠 user_list 按 author_id 映射，name_show 不能漏。
         let name = container.flexibleString(forKey: .name)
+        let nameShow = container.flexibleString(forKey: .nameShow)
         let userName = container.flexibleString(forKey: .userName)
-        self.name = !name.isEmpty ? name : userName
+        let nickname = container.flexibleString(forKey: .nickname)
+        let showNickname = container.flexibleString(forKey: .showNickname)
+        self.name = [name, nameShow, userName, nickname, showNickname].first { !$0.isEmpty } ?? ""
     }
 }
 
@@ -86,7 +99,8 @@ struct TiebaThread: Identifiable, Decodable {
     var id: String { tid }
     let tid: String
     let title: String
-    let authorName: String
+    var authorName: String
+    var authorId: String
     let replyNum: Int
     let createTime: Int
     let lastTime: Int
@@ -99,6 +113,7 @@ struct TiebaThread: Identifiable, Decodable {
         case lastTime = "last_time"
         case fname
         case forumName = "forum_name"
+        case authorId = "author_id"
     }
 
     init(from decoder: Decoder) throws {
@@ -106,14 +121,16 @@ struct TiebaThread: Identifiable, Decodable {
         tid = container.flexibleString(forKey: .tid)
         title = container.flexibleString(forKey: .title)
         var authorName = "未知用户"
-        if let author = try? container.decode(AuthorInfo.self, forKey: .author),
-           !author.name.isEmpty {
-            authorName = author.name
+        var authorId = container.flexibleString(forKey: .authorId)
+        if let author = try? container.decode(AuthorInfo.self, forKey: .author) {
+            if !author.name.isEmpty { authorName = author.name }
+            if !author.id.isEmpty { authorId = author.id }
         } else if let name = try? container.decode(String.self, forKey: .author),
                   !name.isEmpty {
             authorName = name
         }
         self.authorName = authorName
+        self.authorId = authorId
         replyNum = container.flexibleInt(forKey: .replyNum)
         let createTime = container.flexibleInt(forKey: .createTime)
         let lastTime = container.flexibleInt(forKey: .lastTime)
@@ -158,6 +175,12 @@ struct ContentFragment: Decodable {
         case originSrc = "origin_src"
     }
 
+    init(type: Int, text: String, originSrc: String) {
+        self.type = type
+        self.text = text
+        self.originSrc = originSrc
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         type = container.flexibleInt(forKey: .type)
@@ -171,7 +194,8 @@ struct TiebaPost: Identifiable, Decodable {
     var id: String { pid }
     let pid: String
     let floor: Int
-    let authorName: String
+    var authorName: String
+    var authorId: String
     let time: Int
     let content: [ContentFragment]
     let subPostCount: Int
@@ -186,6 +210,7 @@ struct TiebaPost: Identifiable, Decodable {
     enum CodingKeys: String, CodingKey {
         case pid, floor, author, time, content
         case subPostCount = "sub_post_number"
+        case authorId = "author_id"
     }
 
     init(from decoder: Decoder) throws {
@@ -193,16 +218,25 @@ struct TiebaPost: Identifiable, Decodable {
         pid = container.flexibleString(forKey: .pid)
         floor = container.flexibleInt(forKey: .floor)
         var authorName = "未知用户"
-        if let author = try? container.decode(AuthorInfo.self, forKey: .author),
-           !author.name.isEmpty {
-            authorName = author.name
+        var authorId = container.flexibleString(forKey: .authorId)
+        if let author = try? container.decode(AuthorInfo.self, forKey: .author) {
+            if !author.name.isEmpty { authorName = author.name }
+            if !author.id.isEmpty { authorId = author.id }
         } else if let name = try? container.decode(String.self, forKey: .author),
                   !name.isEmpty {
             authorName = name
         }
         self.authorName = authorName
+        self.authorId = authorId
         time = container.flexibleInt(forKey: .time)
-        content = (try? container.decodeIfPresent([ContentFragment].self, forKey: .content)) ?? []
+        // content 可能是片段数组，也可能是纯字符串，两种都接。
+        if let fragments = try? container.decode([ContentFragment].self, forKey: .content) {
+            content = fragments
+        } else if let text = try? container.decode(String.self, forKey: .content), !text.isEmpty {
+            content = [ContentFragment(type: 0, text: text, originSrc: "")]
+        } else {
+            content = []
+        }
         subPostCount = container.flexibleInt(forKey: .subPostCount)
     }
 }
@@ -211,26 +245,30 @@ struct TiebaPost: Identifiable, Decodable {
 struct TiebaSubPost: Identifiable, Decodable {
     var id: String { pid }
     let pid: String
-    let authorName: String
+    var authorName: String
+    var authorId: String
     let time: Int
     let contentText: String
 
     enum CodingKeys: String, CodingKey {
         case pid, author, time, content
+        case authorId = "author_id"
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         pid = container.flexibleString(forKey: .pid)
         var authorName = "未知用户"
-        if let author = try? container.decode(AuthorInfo.self, forKey: .author),
-           !author.name.isEmpty {
-            authorName = author.name
+        var authorId = container.flexibleString(forKey: .authorId)
+        if let author = try? container.decode(AuthorInfo.self, forKey: .author) {
+            if !author.name.isEmpty { authorName = author.name }
+            if !author.id.isEmpty { authorId = author.id }
         } else if let name = try? container.decode(String.self, forKey: .author),
                   !name.isEmpty {
             authorName = name
         }
         self.authorName = authorName
+        self.authorId = authorId
         time = container.flexibleInt(forKey: .time)
         if let text = try? container.decode(String.self, forKey: .content) {
             contentText = text
@@ -245,26 +283,32 @@ struct TiebaSubPost: Identifiable, Decodable {
 struct FrsResponse: Decodable {
     let forum: ForumInfo?
     let threadList: [TiebaThread]?
+    let userList: [AuthorInfo]?
 
     enum CodingKeys: String, CodingKey {
         case forum
         case threadList = "thread_list"
+        case userList = "user_list"
     }
 }
 
 struct PbResponse: Decodable {
     let postList: [TiebaPost]?
+    let userList: [AuthorInfo]?
 
     enum CodingKeys: String, CodingKey {
         case postList = "post_list"
+        case userList = "user_list"
     }
 }
 
 struct FloorResponse: Decodable {
     let subpostList: [TiebaSubPost]?
+    let userList: [AuthorInfo]?
 
     enum CodingKeys: String, CodingKey {
         case subpostList = "subpost_list"
+        case userList = "user_list"
     }
 }
 
@@ -301,10 +345,23 @@ final class TiebaClient {
         return "BDUSS=\(bduss)"
     }
 
+    // 设备标识：本机生成一次的 UUID，只用来让服务端认出是同一台客户端，
+    // 不含任何账号信息，也不发给除贴吧外的任何地方。
+    private var deviceId: String {
+        let key = "tiebaDeviceId"
+        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
+            return existing
+        }
+        let generated = UUID().uuidString.replacingOccurrences(of: "-", with: "").uppercased()
+        UserDefaults.standard.set(generated, forKey: key)
+        return generated
+    }
+
     private func signedParams(_ params: [String: String]) -> [String: String] {
         var signed = params
         signed["_client_type"] = "2"
         signed["_client_version"] = clientVersion
+        signed["cuid"] = deviceId
         signed["sign"] = Self.sign(signed)
         return signed
     }
@@ -393,18 +450,63 @@ final class TiebaClient {
             path: "/c/f/frs/page", params: ["kw": forumName, "pn": String(page)], method: "GET")
         let response = try decode(data, as: FrsResponse.self)
         let resolvedForumName = response.forum?.name ?? ""
+        var threads = response.threadList ?? []
+        // 作者可能不在 thread 里、而在单独的 user_list 里按 author_id 映射。
+        if let users = response.userList, !users.isEmpty {
+            let byId = Dictionary(uniqueKeysWithValues: users.compactMap { user -> (String, String)? in
+                guard !user.id.isEmpty, !user.name.isEmpty else { return nil }
+                return (user.id, user.name)
+            })
+            for index in threads.indices {
+                if (threads[index].authorName == "未知用户" || threads[index].authorName.isEmpty),
+                   let name = byId[threads[index].authorId] {
+                    threads[index].authorName = name
+                }
+            }
+        }
         return ForumThreads(
             forumId: response.forum?.id ?? "",
             forumName: resolvedForumName.isEmpty ? forumName : resolvedForumName,
-            threads: response.threadList ?? [])
+            threads: threads)
     }
 
-    // 楼层列表：GET c/f/pb/page（tid, pn）
+    // 楼层列表：GET c/f/pb/page（tid, pn）。
+    // 截图里详情页报“帖子可能已被删除”：先排除 tid 为空，再按参数组合依次重试
+    // （只带 tid/pn → 加 rn/with_floor → 加 kz），某组成功即返回，不再把第一组的
+    // 服务端报错直接当成帖子已删。全部失败才抛最后一次的原错。
     func fetchPosts(tid: String, page: Int) async throws -> [TiebaPost] {
-        let data = try await request(
-            path: "/c/f/pb/page", params: ["tid": tid, "pn": String(page)], method: "GET")
-        let response = try decode(data, as: PbResponse.self)
-        return response.postList ?? []
+        guard !tid.isEmpty else {
+            throw TiebaError.server("帖子 id 为空（tid 为空），请回到列表重新打开这条帖子")
+        }
+        let variants: [[String: String]] = [
+            ["tid": tid, "pn": String(page)],
+            ["tid": tid, "pn": String(page), "rn": "30", "with_floor": "1"],
+            ["tid": tid, "pn": String(page), "kz": "1"],
+        ]
+        var lastError: Error = TiebaError.invalidResponse
+        for params in variants {
+            do {
+                let data = try await request(path: "/c/f/pb/page", params: params, method: "GET")
+                let response = try decode(data, as: PbResponse.self)
+                var posts = response.postList ?? []
+                if let users = response.userList, !users.isEmpty {
+                    let byId = Dictionary(uniqueKeysWithValues: users.compactMap { user -> (String, String)? in
+                        guard !user.id.isEmpty, !user.name.isEmpty else { return nil }
+                        return (user.id, user.name)
+                    })
+                    for index in posts.indices {
+                        if (posts[index].authorName == "未知用户" || posts[index].authorName.isEmpty),
+                           let name = byId[posts[index].authorId] {
+                            posts[index].authorName = name
+                        }
+                    }
+                }
+                return posts
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
     }
 
     // 楼中楼分页：GET c/f/pb/floor（tid, pid, pn）
@@ -413,7 +515,20 @@ final class TiebaClient {
             path: "/c/f/pb/floor",
             params: ["tid": tid, "pid": pid, "pn": String(page)], method: "GET")
         let response = try decode(data, as: FloorResponse.self)
-        return response.subpostList ?? []
+        var subs = response.subpostList ?? []
+        if let users = response.userList, !users.isEmpty {
+            let byId = Dictionary(uniqueKeysWithValues: users.compactMap { user -> (String, String)? in
+                guard !user.id.isEmpty, !user.name.isEmpty else { return nil }
+                return (user.id, user.name)
+            })
+            for index in subs.indices {
+                if (subs[index].authorName == "未知用户" || subs[index].authorName.isEmpty),
+                   let name = byId[subs[index].authorId] {
+                    subs[index].authorName = name
+                }
+            }
+        }
+        return subs
     }
 
     // MARK: - 发帖（写操作串行：提交中再次提交直接报错，不并发）

@@ -17,9 +17,12 @@ struct ThreadDetailView: View {
     @State private var onlyLandlord = false
     @State private var showLoginAlert = false
 
-    // 只看楼主：本地过滤，作者名与帖子作者相同才保留。
+    // 只看楼主：优先按作者 id 过滤（用户名可能昵称/用户名混用），id 为空时退回按作者名。
     private var visiblePosts: [TiebaPost] {
         guard onlyLandlord else { return posts }
+        if !thread.authorId.isEmpty {
+            return posts.filter { $0.authorId == thread.authorId }
+        }
         return posts.filter { $0.authorName == thread.authorName }
     }
 
@@ -29,6 +32,13 @@ struct ThreadDetailView: View {
                 .padding(.horizontal)
                 .padding(.vertical, 8)
             List {
+                // 实测结论：匿名查详情会被服务端直接拒绝（350004，文案就是
+                // “帖子可能已被删除”，连公告帖也一样），不是帖子真的被删。
+                // 所以未登录时先明说，避免把通用报错当成帖子状态。
+                if !session.isLoggedIn {
+                    Text("未登录：贴吧会拒绝匿名查看详情，显示的“帖子可能已被删除”不代表帖子真的被删。请先返回首页点“关闭”去扫码登录，再重新打开这条帖子。")
+                        .foregroundStyle(.secondary)
+                }
                 if let errorMessage {
                     Text(errorMessage).foregroundStyle(.red)
                 }
@@ -108,7 +118,7 @@ struct ThreadDetailView: View {
                     currentPage = page
                 }
             } catch {
-                errorMessage = error.localizedDescription
+                errorMessage = "tid=\(thread.tid)：\(error.localizedDescription)"
             }
             isLoading = false
             isLoadingMore = false
