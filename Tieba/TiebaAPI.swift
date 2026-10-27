@@ -80,6 +80,8 @@ struct AuthorInfo: Decodable {
 }
 
 // 帖子列表项（c/f/frs/page 的 thread_list）
+// createTime 和 lastTime 分开存：排序“新帖”用 createTime，“回复时间”用 lastTime，
+// “热门”用 replyNum。两者缺失时互相兜底，界面显示不为空。
 struct TiebaThread: Identifiable, Decodable {
     var id: String { tid }
     let tid: String
@@ -87,12 +89,16 @@ struct TiebaThread: Identifiable, Decodable {
     let authorName: String
     let replyNum: Int
     let createTime: Int
+    let lastTime: Int
+    let threadForumName: String
 
     enum CodingKeys: String, CodingKey {
         case tid, title, author
         case replyNum = "reply_num"
         case createTime = "create_time"
         case lastTime = "last_time"
+        case fname
+        case forumName = "forum_name"
     }
 
     init(from decoder: Decoder) throws {
@@ -112,6 +118,32 @@ struct TiebaThread: Identifiable, Decodable {
         let createTime = container.flexibleInt(forKey: .createTime)
         let lastTime = container.flexibleInt(forKey: .lastTime)
         self.createTime = createTime != 0 ? createTime : lastTime
+        self.lastTime = lastTime != 0 ? lastTime : createTime
+        let fname = container.flexibleString(forKey: .fname)
+        let forumName = container.flexibleString(forKey: .forumName)
+        self.threadForumName = !fname.isEmpty ? fname : forumName
+    }
+}
+
+// 帖子排序：热门 = 回复数降序（同回复数按最后回复时间），
+// 回复时间 = 最后回复时间降序，新帖 = 发帖时间降序。
+enum ThreadSort: String, CaseIterable {
+    case hot = "热门"
+    case replyTime = "回复时间"
+    case newest = "新帖"
+
+    func sort(_ threads: [TiebaThread]) -> [TiebaThread] {
+        switch self {
+        case .hot:
+            return threads.sorted {
+                if $0.replyNum != $1.replyNum { return $0.replyNum > $1.replyNum }
+                return $0.lastTime > $1.lastTime
+            }
+        case .replyTime:
+            return threads.sorted { $0.lastTime > $1.lastTime }
+        case .newest:
+            return threads.sorted { $0.createTime > $1.createTime }
+        }
     }
 }
 
