@@ -41,31 +41,125 @@ final class QRLoginManager: ObservableObject {
         }
     }
 
-    // GET passport.baidu.com/v2/api/getqrcode，data.imgdata 为 base64 图片，data.sign 用于轮询。
+    // GET passport.baidu.com/v2/api/getqrcode。
+    // 上一版只认 data.imgdata + data.sign 两种字段，真机上服务端返回格式一变就报
+    // “返回数据无法解析”。这一版：先拿一次 passport 首页让 Cookie（BAIDUID）落袋，
+    // 再按多组参数依次尝试；img/sign 在整份 JSON 里递归找，不再只看 data 层；
+    // 失败时把服务端原返回的前 200 字带出来，不再只给一句笼统报错。
     private func fetchQRCode() async throws -> (UIImage, String) {
+        // 预取首页 Cookie，失败忽略，不阻塞扫码。
+        if let home = URL(string: "https://passport.baidu.com/") {
+            _ = try? await URLSession.shared.data(from: home)
+        }
         let timestamp = Int(Date().timeIntervalSince1970 * 1000)
-        guard let url = URL(string: "https://passport.baidu.com/v2/api/getqrcode?lp=pc&apiver=v3&tpl=pp&tt=\(timestamp)") else {
-            throw TiebaError.invalidResponse
+        let paramSets = [
+            "lp=pc&apiver=v3&tpl=pp",
+            "lp=pc&apiver=v3&tpl=tb",
+            "lp=pc&qrlogin=1&apiver=v3&tpl=pp",
+        ]
+        var lastError = "扫码接口无返回"
+        for params in paramSets {
+            guard let url = URL(string: "https://passport.baidu.com/v2/api/getqrcode?\(params)&tt=\(timestamp)") else {
+                continue
+            }
+            var request = URLRequest(url: url)
+            request.setValue(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                forHTTPHeaderField: "User-Agent")
+            request.setValue("https://passport.baidu.com/", forHTTPHeaderField: "Referer")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            let data: Data
+            do {
+                (data, _) = try await URLSession.shared.data(for: request)
+            } catch {
+                lastError = "网络请求失败：\(error.localizedDescription)"
+                continue
+            }
+            if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+                lastError = "扫码接口直接返回了图片，没有给轮询用的 sign，请改用下方网页扫码"
+                continue
+            }
+            let bodyText = String(data: data, encoding: .utf8) ?? ""
+            let jsonText = stripJSONP(bodyText)
+            guard let jsonData = jsonText.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: jsonData) else {
+                lastError = "扫码接口返回非 JSON：\(snippet(bodyText))"
+                continue
+            }
+            // 服务端报错先原样透传，不再当成“无法解析”。
+            if let errNo = findInt(in: object, keys: ["err_no", "errno", "error_code", "errNo"]),
+               errNo != 0 {
+                let msg = findValue(in: object, key: "err_msg")
+                    ?? findValue(in: object, key: "msg")
+                    ?? "扫码接口报错（\(errNo)）"
+                lastError = msg
+                continue
+            }
+            guard let imgString = findValue(in: object, key: "imgdata")
+                    ?? findValue(in: object, key: "qrcode")
+                    ?? findValue(in: object, key: "img")
+                    ?? findValue(in: object, key: "image"),
+                  let sign = findValue(in: object, key: "sign")
+                    ?? findValue(in: object, key: "uuid")
+                    ?? findValue(in: object, key: "channel_id")
+                    ?? findValue(in: object, key: "qrcode_sign"),
+                  !sign.isEmpty else {
+                lastError = "扫码接口返回无法解析：\(snippet(bodyText))，请改用下方网页扫码"
+                continue
+            }
+            // img 可能是图片 URL，不是 base64。
+            if imgString.hasPrefix("http"), let imgURL = URL(string: imgString),
+               let (imgData, _) = try? await URLSession.shared.data(from: imgURL),
+               let image = UIImage(data: imgData) {
+                return (image, sign)
+            }
+            let base64 = imgString.contains(",")
+                ? String(imgString.split(separator: ",", maxSplits: 1).last ?? "")
+                : imgString
+            let normalized = base64
+                .replacingOccurrences(of: "-", with: "+")
+                .replacingOccurrences(of: "_", with: "/")
+            guard let imageData = Data(base64Encoded: normalized, options: .ignoreUnknownCharacters),
+                  let image = UIImage(data: imageData) else {
+                lastError = "二维码图片解码失败，请改用下方网页扫码"
+                continue
+            }
+            return (image, sign)
         }
-        let data: Data
-        do {
-            (data, _) = try await URLSession.shared.data(from: url)
-        } catch {
-            throw TiebaError.network(error.localizedDescription)
+        throw TiebaError.server(lastError)
+    }
+
+    private func stripJSONP(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let open = trimmed.firstIndex(of: "("), trimmed.hasSuffix(")") else {
+            return trimmed
         }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataObject = object["data"] as? [String: Any],
-              let imgdata = dataObject["imgdata"] as? String,
-              let sign = dataObject["sign"] as? String, !sign.isEmpty else {
-            throw TiebaError.invalidResponse
+        let inner = trimmed[trimmed.index(after: open)..<trimmed.index(before: trimmed.endIndex)]
+        return String(inner)
+    }
+
+    private func snippet(_ text: String) -> String {
+        let cleaned = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        return String(cleaned.prefix(200))
+    }
+
+    private func findInt(in object: Any, keys: [String]) -> Int? {
+        if let dict = object as? [String: Any] {
+            for key in keys {
+                if let number = dict[key] as? Int { return number }
+                if let text = dict[key] as? String, let number = Int(text) { return number }
+            }
+            for value in dict.values {
+                if let found = findInt(in: value, keys: keys) { return found }
+            }
+        } else if let array = object as? [Any] {
+            for value in array {
+                if let found = findInt(in: value, keys: keys) { return found }
+            }
         }
-        // imgdata 可能是裸 base64，也可能是 data:image/png;base64,... 形式。
-        let base64 = imgdata.contains(",") ? String(imgdata.split(separator: ",", maxSplits: 1).last ?? "") : imgdata
-        guard let imageData = Data(base64Encoded: base64, options: .ignoreUnknownCharacters),
-              let image = UIImage(data: imageData) else {
-            throw TiebaError.invalidResponse
-        }
-        return (image, sign)
+        return nil
     }
 
     private func startPolling(sign: String) {
