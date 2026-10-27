@@ -213,6 +213,16 @@ struct TiebaPost: Identifiable, Decodable {
         case authorId = "author_id"
     }
 
+    init(pid: String, floor: Int, authorName: String, authorId: String, time: Int, content: [ContentFragment], subPostCount: Int) {
+        self.pid = pid
+        self.floor = floor
+        self.authorName = authorName
+        self.authorId = authorId
+        self.time = time
+        self.content = content
+        self.subPostCount = subPostCount
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         pid = container.flexibleString(forKey: .pid)
@@ -506,7 +516,75 @@ final class TiebaClient {
                 lastError = error
             }
         }
+        // 客户端接口全部报删帖时，改走网页版帖子页：只取楼层文字和作者名，
+        // 至少把原帖的回复显示出来。网页也拿不到时，才抛客户端接口的原错。
+        if let webPosts = try? await fetchPostsFromWeb(tid: tid, page: page), !webPosts.isEmpty {
+            return webPosts
+        }
         throw lastError
+    }
+
+    // 网页版兜底：GET tieba.baidu.com/p/<tid>，从 HTML 里按顺序取
+    // p_author_name（作者）和 d_post_content（楼层文字），配对成楼层。
+    // 只做文字，图片暂不解析；页数只支持第 1 页，翻页仍走客户端接口。
+    private func fetchPostsFromWeb(tid: String, page: Int) async throws -> [TiebaPost] {
+        guard page == 1, let url = URL(string: "https://tieba.baidu.com/p/\(tid)") else {
+            return []
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.setValue(
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+            forHTTPHeaderField: "User-Agent")
+        if let cookie = cookieHeader {
+            urlRequest.setValue(cookie, forHTTPHeaderField: "Cookie")
+        }
+        let (data, _) = try await URLSession.shared.data(for: urlRequest)
+        guard let html = String(data: data, encoding: .utf8), !html.contains("安全验证") else {
+            return []
+        }
+        let authors = matches(in: html, pattern: "p_author_name[^>]*>([^<]+)<")
+        let contents = matches(in: html, pattern: "d_post_content[^>]*>(.*?)</div>")
+        var posts: [TiebaPost] = []
+        for index in contents.indices {
+            let text = stripHTML(contents[index]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            let author = index < authors.count ? authors[index].trimmingCharacters(in: .whitespacesAndNewlines) : "未知用户"
+            posts.append(TiebaPost(
+                pid: "\(tid)-\(index + 1)", floor: index + 1,
+                authorName: author.isEmpty ? "未知用户" : author, authorId: "",
+                time: 0, content: [ContentFragment(type: 0, text: text, originSrc: "")],
+                subPostCount: 0))
+        }
+        return posts
+    }
+
+    private func matches(in text: String, pattern: String) -> [String] {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
+            return []
+        }
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.matches(in: text, range: range).compactMap { match in
+            guard match.numberOfRanges > 1,
+                  let capture = Range(match.range(at: 1), in: text) else { return nil }
+            return String(text[capture])
+        }
+    }
+
+    private func stripHTML(_ html: String) -> String {
+        var text = html
+            .replacingOccurrences(of: "<br>", with: "\n")
+            .replacingOccurrences(of: "<br/>", with: "\n")
+            .replacingOccurrences(of: "<br />", with: "\n")
+        if let regex = try? NSRegularExpression(pattern: "<[^>]+>", options: []) {
+            text = regex.stringByReplacingMatches(
+                in: text, range: NSRange(text.startIndex..., in: text), withTemplate: "")
+        }
+        return text
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
     }
 
     // 楼中楼分页：GET c/f/pb/floor（tid, pid, pn）
@@ -529,6 +607,51 @@ final class TiebaClient {
             }
         }
         return subs
+    }
+
+    // 关注的吧：依次试几个客户端“关注”接口，第一个返回非空吧名列表的胜出。
+    // 吧名从返回 JSON 里递归找：forum_list / like_forum 等数组里含 fname 的字典。
+    // 全部失败或为空时返回空数组，界面退回本地保存的吧，不阻塞首页。
+    func fetchFollowedForums() async throws -> [String] {
+        guard KeychainStore.isLoggedIn else { return [] }
+        let paths = ["/c/f/forum/like", "/c/f/user/like", "/c/f/forum/fav"]
+        for path in paths {
+            do {
+                let data = try await request(path: path, params: ["pn": "1"], method: "GET")
+                let names = forumNames(in: data)
+                if !names.isEmpty { return names }
+            } catch {
+                continue
+            }
+        }
+        return []
+    }
+
+    private func forumNames(in data: Data) -> [String] {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { return [] }
+        var seen = Set<String>()
+        var result: [String] = []
+        collectForumNames(from: object, into: &result, seen: &seen)
+        return result
+    }
+
+    private func collectForumNames(from object: Any, into result: inout [String], seen: inout Set<String>) {
+        if let dict = object as? [String: Any] {
+            if let fname = dict["fname"] as? String, !fname.isEmpty, !seen.contains(fname) {
+                seen.insert(fname)
+                result.append(fname)
+            } else if let forumName = dict["forum_name"] as? String, !forumName.isEmpty, !seen.contains(forumName) {
+                seen.insert(forumName)
+                result.append(forumName)
+            }
+            for value in dict.values {
+                collectForumNames(from: value, into: &result, seen: &seen)
+            }
+        } else if let array = object as? [Any] {
+            for value in array {
+                collectForumNames(from: value, into: &result, seen: &seen)
+            }
+        }
     }
 
     // MARK: - 发帖（写操作串行：提交中再次提交直接报错，不并发）

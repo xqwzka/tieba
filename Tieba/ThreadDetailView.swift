@@ -28,6 +28,20 @@ struct ThreadDetailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // 详情顶部直接显示楼主用户名和吧名，不再只剩标题。
+            HStack {
+                Text("楼主：\(thread.authorName)")
+                    .font(.subheadline.bold())
+                Spacer()
+                Text(forumName)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Text("回复 \(thread.replyNum)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
             Toggle("只看楼主", isOn: $onlyLandlord)
                 .padding(.horizontal)
                 .padding(.vertical, 8)
@@ -118,7 +132,8 @@ struct ThreadDetailView: View {
                     currentPage = page
                 }
             } catch {
-                errorMessage = "tid=\(thread.tid)：\(error.localizedDescription)"
+                // 报错里不再带 tid：用户要看的是用户名，不是帖子 id。
+                errorMessage = error.localizedDescription
             }
             isLoading = false
             isLoadingMore = false
