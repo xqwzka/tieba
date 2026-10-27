@@ -27,27 +27,26 @@ enum TiebaError: LocalizedError {
 
 extension KeyedDecodingContainer {
     func flexibleString(forKey key: Key) -> String {
-        if let value = try? decodeIfPresent(String.self, forKey: key), let text = value {
+        if let text = try? decode(String.self, forKey: key) {
             return text
         }
-        if let value = try? decodeIfPresent(Int.self, forKey: key), let number = value {
+        if let number = try? decode(Int.self, forKey: key) {
             return String(number)
         }
-        if let value = try? decodeIfPresent(Double.self, forKey: key), let number = value {
+        if let number = try? decode(Double.self, forKey: key) {
             return String(Int(number))
         }
         return ""
     }
 
     func flexibleInt(forKey key: Key) -> Int {
-        if let value = try? decodeIfPresent(Int.self, forKey: key), let number = value {
+        if let number = try? decode(Int.self, forKey: key) {
             return number
         }
-        if let value = try? decodeIfPresent(String.self, forKey: key),
-           let text = value, let number = Int(text) {
+        if let text = try? decode(String.self, forKey: key), let number = Int(text) {
             return number
         }
-        if let value = try? decodeIfPresent(Double.self, forKey: key), let number = value {
+        if let number = try? decode(Double.self, forKey: key) {
             return Int(number)
         }
         return 0
