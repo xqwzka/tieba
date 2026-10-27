@@ -108,6 +108,7 @@ struct TiebaThread: Identifiable, Decodable {
         case tid, title, author
         case replyNum = "reply_num", viewNum = "view_num"
         case createTime = "create_time", lastTime = "last_time"
+        case lastTimeInt = "last_time_int"
         case authorId = "author_id"
     }
 
@@ -131,7 +132,13 @@ struct TiebaThread: Identifiable, Decodable {
         replyNum = container.flexibleInt(forKey: .replyNum)
         viewNum = container.flexibleInt(forKey: .viewNum)
         let createTime = container.flexibleInt(forKey: .createTime)
-        let lastTime = container.flexibleInt(forKey: .lastTime)
+        // 实测（2026-10-27 李毅吧 frs）：last_time 返回的是“10-25”这种月日字符串，
+        // 按时间戳读会得到 0，再回退成发帖时间——于是“回复时间”排序和显示的时间
+        // 全都错成了发帖时间。真正的最后回复时间戳在 last_time_int 字段里。
+        var lastTime = container.flexibleInt(forKey: .lastTime)
+        if lastTime == 0 {
+            lastTime = container.flexibleInt(forKey: .lastTimeInt)
+        }
         self.createTime = createTime != 0 ? createTime : lastTime
         self.lastTime = lastTime != 0 ? lastTime : createTime
     }
