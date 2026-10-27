@@ -5,8 +5,9 @@ iOS 17、SwiftUI、无第三方依赖、XcodeGen 构建的独立贴吧客户端�
 
 ## 功能
 
-- 扫码登录：原生二维码 + 备用网页扫码
+- 扫码登录：原生二维码 + 网页扫码（百度官方二维码，主入口之一）
 - 阅读：吧列表（本地保存）、帖子列表分页、楼层列表分页、楼中楼分页、只看楼主（本地过滤）
+- 帖子排序：帖子列表顶部三个分页——热门（回复数降序）、回复时间（最后回复时间降序）、新帖（发帖时间降序）；排序只针对已加载的帖子，翻页后重新排
 - 发帖：发主题（标题 + 内容）
 - 回帖：帖子底部回帖、每楼的楼中楼回复
 - 未登录也能阅读；发帖、回复按钮在未登录时提示先登录
@@ -14,8 +15,8 @@ iOS 17、SwiftUI、无第三方依赖、XcodeGen 构建的独立贴吧客户端�
 
 ## 登录说明
 
-- 主路径是原生扫码：App 向百度 passport 请求二维码，展示后用百度 App / 贴吧 App 扫码并确认，App 每 2 秒轮询一次，最多 120 次（约 4 分钟），轮询返回里一旦出现 BDUSS 即完成登录。
-- 备用入口在登录页底部：「网页扫码（备用）」，打开百度 passport 登录页（该页本身有扫码），App 每 2 秒检查一次网页 Cookie，拿到 BDUSS 即完成登录。
+- 原生扫码：App 向百度 passport 请求二维码，展示后用百度 App / 贴吧 App 扫码并确认，App 每 2 秒轮询一次，最多 120 次（约 4 分钟），轮询返回里一旦出现 BDUSS 即完成登录。2026-10-27 真机反馈“返回数据无法解析”后已改：先预取 passport 首页 Cookie，UA/Referer 按浏览器发，按 tpl=pp、tpl=tb、qrlogin=1 三组参数依次尝试，img/sign 在整份 JSON 里递归找，失败时把服务端原返回前 200 字显示出来，不再只给一句笼统报错。
+- 网页扫码：登录页上的「网页扫码（百度官方二维码）」，打开百度 passport 登录页（该页本身有扫码），App 每 2 秒检查一次网页 Cookie，拿到 BDUSS 即完成登录。原生扫码接口格式一变就走这里，它不依赖接口返回格式。
 - BDUSS / STOKEN 只保存在本机 iOS Keychain，不写 UserDefaults、不打日志、不经过任何自有服务器。所有贴吧请求都直连 `c.tieba.baidu.com`（发帖凭证走 `tieba.baidu.com/dc/common/tbs`）。
 - 退出登录：首页右上角「退出登录」，即删除 Keychain 里的 BDUSS 和 STOKEN。
 
@@ -33,7 +34,7 @@ xcodebuild -project Tieba.xcodeproj -scheme Tieba -sdk iphoneos \
 
 以下均未在本机验证（本机无 Xcode、无真机），按可能性排序，真机联调时先查这几处：
 
-1. **原生扫码轮询**：`passport.baidu.com/channel/unicast?channel_id=<sign>` 返回里是否真的直接带有 BDUSS（JSON 或 Set-Cookie）。如果扫码确认后轮询一直拿不到 BDUSS，二维码会在约 4 分钟后过期，届时请先用底部的「网页扫码（备用）」入口登录——它直接读网页 Cookie，不依赖轮询返回格式。
+1. **原生扫码**：`passport.baidu.com/v2/api/getqrcode` 的返回格式和 `channel/unicast?channel_id=<sign>` 轮询返回里是否真的直接带有 BDUSS（JSON 或 Set-Cookie）。2026-10-27 真机已报一次“返回数据无法解析”，修复后失败会显示服务端原返回前 200 字，凭那段文字才能确定是参数、Cookie 还是字段名的问题。如果原生扫码仍失败，直接用「网页扫码（百度官方二维码）」登录——它直接读网页 Cookie，不依赖接口返回格式。
 2. **发帖签名与 tbs**：`c/c/thread/add`、`c/c/post/add`、`c/c/comment/add` 的签名算法（参数按 key 排序拼 `key=value` 后加 `tiebaclient!!!` 再 MD5）与 `dc/common/tbs` 返回的 tbs 是否仍被当前服务端接受。签名或 tbs 一变，发帖会直接报服务端原错，界面会原样显示。
 3. **帖子/楼层字段名**：`c/f/frs/page`、`c/f/pb/page`、`c/f/pb/floor` 的 `thread_list`、`post_list`、`subpost_list` 结构与作者、时间、内容片段（type 0 文字、type 3 图片 `origin_src`）字段是否与代码假设一致。解析已做防御处理（缺失字段用默认值，不崩溃），但字段名一旦改名，列表可能出现空白或缺内容。
 4. **风控**：新号、高频发帖、敏感词可能触发验证码、删帖或封号。发帖失败时界面显示的是服务端原错，按原错处理，不要反复重试。
