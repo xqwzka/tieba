@@ -22,8 +22,9 @@ final class TiebaClient {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
-    // App 自生成的安装标识（随机 UUID，首次启动生成后存本地复用），不是硬件信息。
-    // protobuf 发帖的 URL 参数和 common 体里都要带，否则服务端报未登录。
+    // 安装标识：优先用服务端 sync 接口下发的 client_id（TiebaLite 开机就调
+    // /c/s/sync 拿这个值，之后所有请求都带它）；拿不到时才用 App 自生成的随机 UUID
+    // 兜底。两者都不是硬件信息，本地 UUID 只是上一版的过渡方案。
     private var clientId: String {
         let key = "tiebaClientId"
         if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
@@ -32,6 +33,35 @@ final class TiebaClient {
         let generated = UUID().uuidString
         UserDefaults.standard.set(generated, forKey: key)
         return generated
+    }
+
+    // 向服务端要一个正式的 client_id（首跑时不带旧值，服务端会新发一个），
+    // 成功就存下来以后复用；失败不阻塞发帖，退回本地 UUID。
+    private func ensureServerClientId() async -> String {
+        let key = "tiebaServerClientId"
+        if let stored = UserDefaults.standard.string(forKey: key), !stored.isEmpty {
+            return stored
+        }
+        guard KeychainStore.isLoggedIn else { return clientId }
+        do {
+            let data = try await request(path: "/c/s/sync", params: ["_msg_status": "1"], method: "POST")
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return clientId
+            }
+            let root = (object["data"] as? [String: Any]) ?? object
+            if let client = root["client"] as? [String: Any],
+               let issued = client["client_id"] as? String, !issued.isEmpty {
+                UserDefaults.standard.set(issued, forKey: key)
+                return issued
+            }
+            if let issued = root["client_id"] as? String, !issued.isEmpty {
+                UserDefaults.standard.set(issued, forKey: key)
+                return issued
+            }
+        } catch {
+            // 拿不到就用本地 UUID，不让同步失败挡住发帖。
+        }
+        return clientId
     }
 
     private var cookieHeader: String? {
@@ -184,21 +214,37 @@ final class TiebaClient {
 
     // MARK: - 帖子列表（已验证通过）
 
-    func fetchThreads(forumName: String, page: Int, force: Bool = false) async throws -> ForumThreads {
-        let cacheKey = "\(forumName)#\(page)"
+    // 吧列表排序必须向服务端要：客户端只对已加载的一页内排序时，
+    // “新帖”排出来的只是最近有回复的旧帖，不是全吧最新发表的帖子。
+    // TiebaLite 的做法：sort_type=0 回复时间、1 发帖时间（web frs 与 protobuf FrsPage 同款参数）。
+    // 服务端若不认该参数会报错，此时退回不带参数的老请求，客户端排序兜底。
+    func fetchThreads(forumName: String, page: Int, force: Bool = false, sort: ThreadSort = .replyTime) async throws -> ForumThreads {
+        let serverSort = sort == .newest ? 1 : 0
+        let cacheKey = "\(forumName)#\(page)#\(serverSort)"
         if !force, let (at, cached) = threadsCache[cacheKey], Date().timeIntervalSince(at) < 60 {
             return cached
         }
-        let data = try await request(path: "/c/f/frs/page", params: ["kw": forumName, "pn": String(page)], method: "GET")
-        let response = try decode(data, as: FrsResponse.self)
-        var threads = response.threadList ?? []
-        applyUsers(response.userList, to: &threads)
-        let result = ForumThreads(
-            forumId: response.forum?.id ?? "",
-            forumName: response.forum?.name.isEmpty == false ? (response.forum?.name ?? forumName) : forumName,
-            threads: threads)
-        threadsCache[cacheKey] = (Date(), result)
-        return result
+        var lastError: Error = TiebaError.invalidResponse
+        for params in [
+            ["kw": forumName, "pn": String(page), "sort_type": String(serverSort)],
+            ["kw": forumName, "pn": String(page)],
+        ] {
+            do {
+                let data = try await request(path: "/c/f/frs/page", params: params, method: "GET")
+                let response = try decode(data, as: FrsResponse.self)
+                var threads = response.threadList ?? []
+                applyUsers(response.userList, to: &threads)
+                let result = ForumThreads(
+                    forumId: response.forum?.id ?? "",
+                    forumName: response.forum?.name.isEmpty == false ? (response.forum?.name ?? forumName) : forumName,
+                    threads: threads)
+                threadsCache[cacheKey] = (Date(), result)
+                return result
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
     }
 
     // MARK: - 帖子详情（已验证通过，2026-10-27 只读实测）
@@ -441,8 +487,9 @@ final class TiebaClient {
     private func postViaProtobuf(forumId: String, forumName: String, tid: String, content: String, postId: String?, replyUid: String?) async throws {
         guard let bduss = KeychainStore.bduss, !bduss.isEmpty else { throw TiebaError.notLoggedIn }
         let tbs = try await fetchTBS()
+        let cid = await ensureServerClientId()
         let protobuf = TiebaProtobuf.addPostRequest(
-            bduss: bduss, stoken: KeychainStore.stoken, tbs: tbs, clientId: clientId,
+            bduss: bduss, stoken: KeychainStore.stoken, tbs: tbs, clientId: cid,
             fid: forumId, kw: forumName, tid: tid, content: content,
             postId: postId, replyUid: replyUid)
         let (body, contentType) = TiebaProtobuf.multipartBody(stoken: KeychainStore.stoken, protobuf: protobuf)
@@ -455,7 +502,7 @@ final class TiebaClient {
             URLQueryItem(name: "format", value: "protobuf"),
             URLQueryItem(name: "_client_version", value: "12.35.1.0"),
             URLQueryItem(name: "BDUSS", value: bduss),
-            URLQueryItem(name: "_client_id", value: clientId),
+            URLQueryItem(name: "_client_id", value: cid),
             URLQueryItem(name: "_client_type", value: "2"),
             URLQueryItem(name: "_timestamp", value: String(Int64(Date().timeIntervalSince1970 * 1000))),
         ]

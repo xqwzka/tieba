@@ -60,7 +60,12 @@ struct ThreadListView: View {
                 HStack(spacing: 24) {
                     ForEach(ThreadSort.allCases, id: \.self) { mode in
                         Button {
+                            // 切排序要重新向服务端要一页：只在客户端重排旧的一页，
+                            // “新帖”永远排不出全吧最新发表的帖子。
                             sort = mode
+                            currentPage = 1
+                            noMore = false
+                            load(page: 1, replace: true, sort: mode)
                         } label: {
                             VStack(spacing: 4) {
                                 Text(mode.rawValue)
@@ -159,7 +164,7 @@ struct ThreadListView: View {
         isLoading = true
         defer { isLoading = false }
         do {
-            let result = try await TiebaClient.shared.fetchThreads(forumName: forumName, page: 1, force: true)
+            let result = try await TiebaClient.shared.fetchThreads(forumName: forumName, page: 1, force: true, sort: sort)
             forumId = result.forumId
             threads = result.threads
             currentPage = 1
@@ -172,16 +177,17 @@ struct ThreadListView: View {
         }
     }
 
-    private func load(page: Int, replace: Bool) {
+    private func load(page: Int, replace: Bool, sort: ThreadSort? = nil) {
         if replace {
             isLoading = true
         } else {
             isLoadingMore = true
         }
         errorMessage = nil
+        let effectiveSort = sort ?? self.sort
         Task {
             do {
-                let result = try await TiebaClient.shared.fetchThreads(forumName: forumName, page: page)
+                let result = try await TiebaClient.shared.fetchThreads(forumName: forumName, page: page, sort: effectiveSort)
                 forumId = result.forumId
                 if replace {
                     threads = result.threads
