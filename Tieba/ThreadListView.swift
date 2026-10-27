@@ -1,5 +1,7 @@
 import SwiftUI
 
+// 仿 NodeSeek 列表样式：顶部新帖子/吧名/加号、横向排序标签（选中橙色下划线）、
+// 每行头像首字 + 标题 + 作者·时间·吧名 + 右侧浏览/回复数。
 struct ThreadListView: View {
     let forumName: String
 
@@ -15,7 +17,7 @@ struct ThreadListView: View {
     @State private var showLoginAlert = false
     @State private var sort: ThreadSort = .replyTime
 
-    // 顶部三个分页就是三种排序：热门 / 回复时间 / 新帖。
+    // 顶部三个标签就是三种排序：热门 / 回复时间 / 新帖。
     // 排序只针对已加载的帖子（翻页加载后会重新排），不是服务端排序。
     private var visibleThreads: [TiebaThread] {
         sort.sort(threads)
@@ -24,22 +26,67 @@ struct ThreadListView: View {
     private func timeText(for thread: TiebaThread) -> String {
         switch sort {
         case .newest:
-            return "发帖 \(formatTiebaTime(thread.createTime))"
+            return relativeTiebaTime(thread.createTime)
         case .replyTime, .hot:
-            return "最后回复 \(formatTiebaTime(thread.lastTime))"
+            return relativeTiebaTime(thread.lastTime)
+        }
+    }
+
+    private func openCompose() {
+        if session.isLoggedIn {
+            showCompose = true
+        } else {
+            showLoginAlert = true
         }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("排序", selection: $sort) {
-                ForEach(ThreadSort.allCases, id: \.self) { mode in
-                    Text(mode.rawValue).tag(mode)
+            // 顶部栏：左新帖子、中间吧名、右加号，都是发帖入口。
+            HStack {
+                Button("新帖子", action: openCompose)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .overlay(Capsule().stroke(Color.secondary.opacity(0.4)))
+                Spacer()
+                Text(forumName)
+                    .font(.headline)
+                Spacer()
+                Button(action: openCompose) {
+                    Image(systemName: "plus")
+                        .font(.title3)
+                        .padding(10)
+                        .overlay(Circle().stroke(Color.secondary.opacity(0.4)))
                 }
+                .buttonStyle(.plain)
             }
-            .pickerStyle(.segmented)
             .padding(.horizontal)
             .padding(.vertical, 8)
+
+            // 横向排序标签：选中黑字加粗 + 橙色下划线，未选中灰字。
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 24) {
+                    ForEach(ThreadSort.allCases, id: \.self) { mode in
+                        Button {
+                            sort = mode
+                        } label: {
+                            VStack(spacing: 4) {
+                                Text(mode.rawValue)
+                                    .font(sort == mode ? .headline : .body)
+                                    .foregroundStyle(sort == mode ? .primary : .secondary)
+                                Rectangle()
+                                    .fill(sort == mode ? Color.orange : Color.clear)
+                                    .frame(height: 3)
+                                    .frame(width: 24)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal)
+            }
+            Divider()
+
             List {
                 if let errorMessage {
                     Text(errorMessage).foregroundStyle(.red)
@@ -48,17 +95,25 @@ struct ThreadListView: View {
                     NavigationLink {
                         ThreadDetailView(thread: thread, forumId: forumId, forumName: forumName)
                     } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(thread.title.isEmpty ? "(无标题)" : thread.title)
-                                .lineLimit(2)
-                            HStack {
-                                Text(thread.authorName)
-                                Text("回复 \(thread.replyNum)")
-                                Text(timeText(for: thread))
+                        HStack(alignment: .top, spacing: 12) {
+                            avatar(for: thread.authorName)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(thread.title.isEmpty ? "(无标题)" : thread.title)
+                                    .lineLimit(2)
+                                Text("\(thread.authorName) · \(timeText(for: thread)) · \(forumName)")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            HStack(spacing: 12) {
+                                Label(countText(thread.viewNum), systemImage: "eye")
+                                Label(countText(thread.replyNum), systemImage: "message")
                             }
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         }
+                        .padding(.vertical, 4)
                     }
                 }
                 if !threads.isEmpty && !noMore {
@@ -68,19 +123,9 @@ struct ThreadListView: View {
                     .disabled(isLoadingMore)
                 }
             }
+            .listStyle(.plain)
         }
-        .navigationTitle(forumName)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("发帖") {
-                    if session.isLoggedIn {
-                        showCompose = true
-                    } else {
-                        showLoginAlert = true
-                    }
-                }
-            }
-        }
+        .navigationBarTitleDisplayMode(.inline)
         .alert("请先登录", isPresented: $showLoginAlert) {
             Button("好", role: .cancel) {}
         } message: {
@@ -101,6 +146,18 @@ struct ThreadListView: View {
                 ProgressView()
             }
         }
+    }
+
+    // 头像：没有头像接口时用作者名首字 + 固定色盘，保证每行都有圆头像。
+    private func avatar(for name: String) -> some View {
+        let palette: [Color] = [.orange, .blue, .green, .purple, .pink, .teal, .red, .brown]
+        let hash = name.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+        let initial = name.isEmpty ? "?" : String(name.prefix(1))
+        return Text(initial)
+            .font(.headline)
+            .foregroundStyle(.white)
+            .frame(width: 44, height: 44)
+            .background(Circle().fill(palette[abs(hash) % palette.count].opacity(0.8)))
     }
 
     private func reload() {
@@ -145,4 +202,22 @@ struct ThreadListView: View {
             isLoadingMore = false
         }
     }
+}
+
+// 相对时间：刚刚 / X 分钟前 / X 小时前 / MM-dd，贴合截图的第二行样式。
+func relativeTiebaTime(_ timestamp: Int) -> String {
+    guard timestamp > 0 else { return "" }
+    let seconds = Int(Date().timeIntervalSince1970) - timestamp
+    if seconds < 60 { return "刚刚" }
+    if seconds < 3600 { return "\(seconds / 60) 分钟前" }
+    if seconds < 86400 { return "\(seconds / 3600) 小时前" }
+    return formatTiebaTime(timestamp)
+}
+
+// 计数：10000 以上用 k，如 144.4k；以下直接显示数字。
+func countText(_ value: Int) -> String {
+    if value >= 10000 {
+        return String(format: "%.1fk", Double(value) / 1000.0)
+    }
+    return "\(value)"
 }

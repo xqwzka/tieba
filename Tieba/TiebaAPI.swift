@@ -102,6 +102,7 @@ struct TiebaThread: Identifiable, Decodable {
     var authorName: String
     var authorId: String
     let replyNum: Int
+    let viewNum: Int
     let createTime: Int
     let lastTime: Int
     let threadForumName: String
@@ -109,6 +110,7 @@ struct TiebaThread: Identifiable, Decodable {
     enum CodingKeys: String, CodingKey {
         case tid, title, author
         case replyNum = "reply_num"
+        case viewNum = "view_num"
         case createTime = "create_time"
         case lastTime = "last_time"
         case fname
@@ -132,6 +134,7 @@ struct TiebaThread: Identifiable, Decodable {
         self.authorName = authorName
         self.authorId = authorId
         replyNum = container.flexibleInt(forKey: .replyNum)
+        viewNum = container.flexibleInt(forKey: .viewNum)
         let createTime = container.flexibleInt(forKey: .createTime)
         let lastTime = container.flexibleInt(forKey: .lastTime)
         self.createTime = createTime != 0 ? createTime : lastTime

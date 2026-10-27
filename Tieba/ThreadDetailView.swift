@@ -184,6 +184,14 @@ struct PostRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
+                // 与列表同款头像首字，楼层也一眼看出是谁。
+                let palette: [Color] = [.orange, .blue, .green, .purple, .pink, .teal, .red, .brown]
+                let hash = post.authorName.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+                Text(post.authorName.isEmpty ? "?" : String(post.authorName.prefix(1)))
+                    .font(.footnote.bold())
+                    .foregroundStyle(.white)
+                    .frame(width: 32, height: 32)
+                    .background(Circle().fill(palette[abs(hash) % palette.count].opacity(0.8)))
                 Text(post.authorName)
                     .font(.subheadline.bold())
                 Spacer()
