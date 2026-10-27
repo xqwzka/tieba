@@ -60,18 +60,17 @@ struct ThreadDetailView: View {
                 }
                 ForEach(visiblePosts) { post in
                     PostRow(post: post, tid: thread.tid, forumId: forumId, forumName: forumName)
+                        .onAppear {
+                            // “加载更多楼层”按钮已去掉：滑到最后一行时自动加载下一页。
+                            if post.id == visiblePosts.last?.id {
+                                loadMore()
+                            }
+                        }
                 }
             }
             .refreshable {
                 // 下拉刷新绕过 60 秒缓存，直接向服务端要最新楼层。
                 await refreshNow()
-            }
-            if !posts.isEmpty && !noMore {
-                Button(isLoadingMore ? "加载中…" : "加载更多楼层") {
-                    loadMore()
-                }
-                .disabled(isLoadingMore)
-                .padding(.vertical, 8)
             }
             Divider()
             HStack {
@@ -101,9 +100,8 @@ struct ThreadDetailView: View {
             Text("回帖需要先登录。关闭本页回到登录页扫码。")
         }
         .onAppear {
-            if posts.isEmpty {
-                reload()
-            }
+            // 打开帖子就自动刷新，不再只在空页时加载、其余时间吃 60 秒缓存。
+            Task { await refreshNow() }
         }
         .overlay {
             if isLoading && posts.isEmpty {
@@ -125,6 +123,8 @@ struct ThreadDetailView: View {
 
     private func refreshNow() async {
         errorMessage = nil
+        isLoading = true
+        defer { isLoading = false }
         do {
             let fetched = try await TiebaClient.shared.fetchPosts(tid: thread.tid, page: 1, force: true)
             posts = fetched
@@ -185,7 +185,7 @@ struct ThreadDetailView: View {
                 try await TiebaClient.shared.addPost(
                     forumId: forumId, forumName: forumName, tid: thread.tid, content: content)
                 replyText = ""
-                reload()
+                await refreshNow()
             } catch {
                 errorMessage = error.localizedDescription
             }

@@ -22,6 +22,18 @@ final class TiebaClient {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    // App 自生成的安装标识（随机 UUID，首次启动生成后存本地复用），不是硬件信息。
+    // protobuf 发帖的 URL 参数和 common 体里都要带，否则服务端报未登录。
+    private var clientId: String {
+        let key = "tiebaClientId"
+        if let existing = UserDefaults.standard.string(forKey: key), !existing.isEmpty {
+            return existing
+        }
+        let generated = UUID().uuidString
+        UserDefaults.standard.set(generated, forKey: key)
+        return generated
+    }
+
     private var cookieHeader: String? {
         guard let bduss = KeychainStore.bduss, !bduss.isEmpty else { return nil }
         if let stoken = KeychainStore.stoken, !stoken.isEmpty {
@@ -430,7 +442,7 @@ final class TiebaClient {
         guard let bduss = KeychainStore.bduss, !bduss.isEmpty else { throw TiebaError.notLoggedIn }
         let tbs = try await fetchTBS()
         let protobuf = TiebaProtobuf.addPostRequest(
-            bduss: bduss, stoken: KeychainStore.stoken, tbs: tbs,
+            bduss: bduss, stoken: KeychainStore.stoken, tbs: tbs, clientId: clientId,
             fid: forumId, kw: forumName, tid: tid, content: content,
             postId: postId, replyUid: replyUid)
         let (body, contentType) = TiebaProtobuf.multipartBody(stoken: KeychainStore.stoken, protobuf: protobuf)
@@ -443,6 +455,7 @@ final class TiebaClient {
             URLQueryItem(name: "format", value: "protobuf"),
             URLQueryItem(name: "_client_version", value: "12.35.1.0"),
             URLQueryItem(name: "BDUSS", value: bduss),
+            URLQueryItem(name: "_client_id", value: clientId),
             URLQueryItem(name: "_client_type", value: "2"),
             URLQueryItem(name: "_timestamp", value: String(Int64(Date().timeIntervalSince1970 * 1000))),
         ]

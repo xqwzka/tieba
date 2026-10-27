@@ -75,6 +75,11 @@ struct HomeView: View {
                 }
             }
             .environment(\.editMode, .constant(isSorting ? .active : .inactive))
+            .refreshable {
+                if session.isLoggedIn {
+                    loadFollowed()
+                }
+            }
             .navigationTitle("贴吧")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -96,7 +101,8 @@ struct HomeView: View {
             }
             .onAppear {
                 forums = UserDefaults.standard.stringArray(forKey: savedForumsKey) ?? []
-                if session.isLoggedIn && followedForums.isEmpty {
+                // 打开贴吧就自动刷新关注列表，不再只在空列表时拉取。
+                if session.isLoggedIn {
                     loadFollowed()
                 }
             }

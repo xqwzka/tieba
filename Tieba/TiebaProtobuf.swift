@@ -45,11 +45,15 @@ enum TiebaProtobuf {
     }
 
     // CommonRequest（V12_POST 精简版）：只带身份与版本字段，
-    // _client_id、cuid、imei、android_id、device_score 等设备指纹一律不发（开发文档红线）。
-    static func commonRequest(bduss: String, stoken: String?, tbs: String) -> Data {
+    // cuid、imei、android_id、device_score 等硬件指纹一律不发（开发文档红线）。
+    // _client_id 是 App 首次启动时生成的随机 UUID、存本地，不是硬件信息：
+    // TiebaLite 的同名字段同样是服务端/本地为每次安装生成的标识，protobuf 发帖缺了它
+    // 会被服务端当成未登录。
+    static func commonRequest(bduss: String, stoken: String?, tbs: String, clientId: String) -> Data {
         var w = Writer()
         w.intField(1, 2) // _client_type
         w.stringField(2, "12.35.1.0") // _client_version（TiebaLite TIEBA_V12_POST）
+        w.stringField(3, clientId) // _client_id
         w.int64Field(8, Int64(Date().timeIntervalSince1970 * 1000)) // _timestamp
         w.stringField(10, bduss) // BDUSS
         w.stringField(11, tbs) // tbs
@@ -59,12 +63,12 @@ enum TiebaProtobuf {
 
     // AddPostRequestData：postId 为空 = 楼层回复；非空 = 楼中楼回复。
     static func addPostRequest(
-        bduss: String, stoken: String?, tbs: String,
+        bduss: String, stoken: String?, tbs: String, clientId: String,
         fid: String, kw: String, tid: String, content: String,
         postId: String?, replyUid: String?
     ) -> Data {
         var d = Writer()
-        d.bytesField(1, commonRequest(bduss: bduss, stoken: stoken, tbs: tbs)) // common
+        d.bytesField(1, commonRequest(bduss: bduss, stoken: stoken, tbs: tbs, clientId: clientId)) // common
         d.stringField(6, "1") // anonymous（TiebaLite 发帖固定为 1）
         d.stringField(7, "0") // can_no_forum
         d.stringField(8, "0") // is_feedback

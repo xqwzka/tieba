@@ -133,9 +133,8 @@ struct ThreadListView: View {
             }
         }
         .onAppear {
-            if threads.isEmpty {
-                reload()
-            }
+            // 打开列表就自动刷新，不再只在空页时加载、其余时间吃 60 秒缓存。
+            Task { await refreshNow() }
         }
         .overlay {
             if isLoading && threads.isEmpty {
@@ -157,6 +156,8 @@ struct ThreadListView: View {
 
     private func refreshNow() async {
         errorMessage = nil
+        isLoading = true
+        defer { isLoading = false }
         do {
             let result = try await TiebaClient.shared.fetchThreads(forumName: forumName, page: 1, force: true)
             forumId = result.forumId
