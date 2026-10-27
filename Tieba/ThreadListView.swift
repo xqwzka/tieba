@@ -13,34 +13,60 @@ struct ThreadListView: View {
     @State private var errorMessage: String?
     @State private var showCompose = false
     @State private var showLoginAlert = false
+    @State private var sort: ThreadSort = .replyTime
+
+    // 顶部三个分页就是三种排序：热门 / 回复时间 / 新帖。
+    // 排序只针对已加载的帖子（翻页加载后会重新排），不是服务端排序。
+    private var visibleThreads: [TiebaThread] {
+        sort.sort(threads)
+    }
+
+    private func timeText(for thread: TiebaThread) -> String {
+        switch sort {
+        case .newest:
+            return "发帖 \(formatTiebaTime(thread.createTime))"
+        case .replyTime, .hot:
+            return "最后回复 \(formatTiebaTime(thread.lastTime))"
+        }
+    }
 
     var body: some View {
-        List {
-            if let errorMessage {
-                Text(errorMessage).foregroundStyle(.red)
+        VStack(spacing: 0) {
+            Picker("排序", selection: $sort) {
+                ForEach(ThreadSort.allCases, id: \.self) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
             }
-            ForEach(threads) { thread in
-                NavigationLink {
-                    ThreadDetailView(thread: thread, forumId: forumId, forumName: forumName)
-                } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(thread.title.isEmpty ? "(无标题)" : thread.title)
-                            .lineLimit(2)
-                        HStack {
-                            Text(thread.authorName)
-                            Text("回复 \(thread.replyNum)")
-                            Text(formatTiebaTime(thread.createTime))
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+            List {
+                if let errorMessage {
+                    Text(errorMessage).foregroundStyle(.red)
+                }
+                ForEach(visibleThreads) { thread in
+                    NavigationLink {
+                        ThreadDetailView(thread: thread, forumId: forumId, forumName: forumName)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(thread.title.isEmpty ? "(无标题)" : thread.title)
+                                .lineLimit(2)
+                            HStack {
+                                Text(thread.authorName)
+                                Text("回复 \(thread.replyNum)")
+                                Text(timeText(for: thread))
+                            }
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                         }
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                     }
                 }
-            }
-            if !threads.isEmpty && !noMore {
-                Button(isLoadingMore ? "加载中…" : "加载更多") {
-                    loadMore()
+                if !threads.isEmpty && !noMore {
+                    Button(isLoadingMore ? "加载中…" : "加载更多") {
+                        loadMore()
+                    }
+                    .disabled(isLoadingMore)
                 }
-                .disabled(isLoadingMore)
             }
         }
         .navigationTitle(forumName)
