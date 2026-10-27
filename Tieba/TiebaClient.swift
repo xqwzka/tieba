@@ -421,6 +421,48 @@ final class TiebaClient {
         _ = try await request(path: "/c/c/thread/add", params: ["fid": forumId, "kw": forumName, "title": title, "content": content, "tbs": tbs], method: "POST")
     }
 
+    // 发帖/回复走 protobuf 接口（TiebaLite 现行做法）：
+    // JSON 表单接口服务端收了也不落库，是之前“无报错但发不出去”的根因。
+    // 成功后清掉该帖的详情缓存，否则 60 秒缓存会让刚发的楼层在自己这边也看不到。
+    private func postViaProtobuf(forumId: String, forumName: String, tid: String, content: String, postId: String?, replyUid: String?) async throws {
+        guard let bduss = KeychainStore.bduss, !bduss.isEmpty else { throw TiebaError.notLoggedIn }
+        let tbs = try await fetchTBS()
+        let protobuf = TiebaProtobuf.addPostRequest(
+            bduss: bduss, stoken: KeychainStore.stoken, tbs: tbs,
+            fid: forumId, kw: forumName, tid: tid, content: content,
+            postId: postId, replyUid: replyUid)
+        let (body, contentType) = TiebaProtobuf.multipartBody(stoken: KeychainStore.stoken, protobuf: protobuf)
+        guard let url = URL(string: "https://tiebac.baidu.com/c/c/post/add?cmd=309731&format=protobuf&_client_version=12.35.1.0") else {
+            throw TiebaError.invalidResponse
+        }
+        var urlRequest = URLRequest(url: url)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("tieba/12.35.1.0", forHTTPHeaderField: "User-Agent")
+        urlRequest.setValue("protobuf", forHTTPHeaderField: "X-BD-DATA-TYPE")
+        urlRequest.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        if let cookie = cookieHeader {
+            urlRequest.setValue(cookie, forHTTPHeaderField: "Cookie")
+        }
+        urlRequest.httpBody = body
+        let (data, response): (Data, URLResponse)
+        do {
+            (data, response) = try await URLSession.shared.data(for: urlRequest)
+        } catch {
+            throw TiebaError.network("发帖提交失败：\(error.localizedDescription)")
+        }
+        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw TiebaError.network("发帖提交失败：贴吧返回 HTTP \(http.statusCode)")
+        }
+        guard let (code, message) = TiebaProtobuf.parseAddPostError(data) else {
+            // 响应不是 protobuf：可能是风控页/登录页，必须报错，不能再当成功。
+            throw TiebaError.server("发帖失败：服务端返回无法解析，请去官方 App 确认登录态后再试")
+        }
+        guard code == 0 else {
+            throw TiebaError.server(message.isEmpty ? "发帖失败（错误码 \(code)）" : message)
+        }
+        postsCache.keys.filter { $0.hasPrefix("\(tid)#") }.forEach { postsCache.removeValue(forKey: $0) }
+    }
+
     func addPost(forumId: String, forumName: String, tid: String, content: String) async throws {
         guard !writeInFlight else { throw TiebaError.alreadySubmitting }
         try checkSubmitInterval()
@@ -428,18 +470,16 @@ final class TiebaClient {
         guard !forumId.isEmpty else { throw TiebaError.server("缺少吧 id，请先打开该吧再回复") }
         writeInFlight = true
         defer { writeInFlight = false }
-        let tbs = try await fetchTBS()
-        _ = try await request(path: "/c/c/post/add", params: ["fid": forumId, "kw": forumName, "tid": tid, "content": content, "tbs": tbs], method: "POST")
+        try await postViaProtobuf(forumId: forumId, forumName: forumName, tid: tid, content: content, postId: nil, replyUid: nil)
     }
 
-    func addComment(forumId: String, forumName: String, tid: String, pid: String, content: String) async throws {
+    func addComment(forumId: String, forumName: String, tid: String, pid: String, content: String, replyUid: String? = nil) async throws {
         guard !writeInFlight else { throw TiebaError.alreadySubmitting }
         try checkSubmitInterval()
         guard KeychainStore.isLoggedIn else { throw TiebaError.notLoggedIn }
         guard !forumId.isEmpty else { throw TiebaError.server("缺少吧 id，请先打开该吧再回复") }
         writeInFlight = true
         defer { writeInFlight = false }
-        let tbs = try await fetchTBS()
-        _ = try await request(path: "/c/c/comment/add", params: ["fid": forumId, "kw": forumName, "tid": tid, "pid": pid, "content": content, "tbs": tbs], method: "POST")
+        try await postViaProtobuf(forumId: forumId, forumName: forumName, tid: tid, content: content, postId: pid, replyUid: replyUid)
     }
 }

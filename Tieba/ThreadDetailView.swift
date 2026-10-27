@@ -306,7 +306,7 @@ struct PostRow: View {
         Task {
             do {
                 try await TiebaClient.shared.addComment(
-                    forumId: forumId, forumName: forumName, tid: tid, pid: post.pid, content: content)
+                    forumId: forumId, forumName: forumName, tid: tid, pid: post.pid, content: content, replyUid: post.authorId)
                 subInput = ""
                 subNoMore = false
                 loadSubPosts(page: 1, replace: true)
