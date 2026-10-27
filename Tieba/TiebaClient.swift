@@ -64,6 +64,9 @@ final class TiebaClient {
             urlRequest.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         }
         urlRequest.httpMethod = method
+        // 客户端接口按 TiebaLite 的做法带官方客户端 UA（版本与 _client_version 参数一致），
+        // 避免服务端把请求当成网页请求处理（例如重定向到 http 页面）。
+        urlRequest.setValue("bdtb for Android \(clientVersion)", forHTTPHeaderField: "User-Agent")
         if let cookie = cookieHeader {
             urlRequest.setValue(cookie, forHTTPHeaderField: "Cookie")
         }
@@ -372,22 +375,39 @@ final class TiebaClient {
 
     func fetchTBS() async throws -> String {
         guard KeychainStore.isLoggedIn else { throw TiebaError.notLoggedIn }
-        guard let url = URL(string: "https://tieba.baidu.com/dc/common/tbs") else {
-            throw TiebaError.invalidResponse
+        // tbs 是回复和发帖的公共前置步骤：它挂了，两边一起挂。
+        // 之前这里 https 请求失败时把系统错误原样抛出去，界面上就是截图里那句
+        // 没有“网络错误：”前缀的 ATS 原文；现在 https 失败改走 http 再试一次
+        //（已给 tieba.baidu.com 加明文例外），两次都失败才报带步骤名的错。
+        var lastError: Error?
+        for scheme in ["https", "http"] {
+            guard let url = URL(string: "\(scheme)://tieba.baidu.com/dc/common/tbs") else { continue }
+            var urlRequest = URLRequest(url: url)
+            urlRequest.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1", forHTTPHeaderField: "User-Agent")
+            if let cookie = cookieHeader {
+                urlRequest.setValue(cookie, forHTTPHeaderField: "Cookie")
+            }
+            do {
+                let (data, response) = try await URLSession.shared.data(for: urlRequest)
+                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                    lastError = TiebaError.server("贴吧返回 HTTP \(http.statusCode)")
+                    continue
+                }
+                guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let tbs = object["tbs"] as? String, !tbs.isEmpty else {
+                    // https 返回的可能是登录页之类的非 tbs 内容，也留给 http 再试一次，
+                    // 两次都拿不到才报凭证失败。
+                    lastError = TiebaError.missingTBS
+                    continue
+                }
+                return tbs
+            } catch let error as TiebaError {
+                throw error
+            } catch {
+                lastError = error
+            }
         }
-        var urlRequest = URLRequest(url: url)
-        if let cookie = cookieHeader {
-            urlRequest.setValue(cookie, forHTTPHeaderField: "Cookie")
-        }
-        let (data, response) = try await URLSession.shared.data(for: urlRequest)
-        if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-            throw TiebaError.server("贴吧返回 HTTP \(http.statusCode)")
-        }
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let tbs = object["tbs"] as? String, !tbs.isEmpty else {
-            throw TiebaError.missingTBS
-        }
-        return tbs
+        throw TiebaError.network("获取发帖凭证(tbs)失败：\(lastError?.localizedDescription ?? "未知错误")")
     }
 
     func addThread(forumId: String, forumName: String, title: String, content: String) async throws {

@@ -19,6 +19,14 @@ targets:
             tb.himg.baidu.com:
               NSExceptionAllowsInsecureHTTPLoads: true
               NSIncludesSubdomains: true
+            # 发帖凭证 tbs 的 https 请求会被服务端重定向到 http，
+            # 不加这两个例外，iOS 会直接以 ATS 错误拦截，回复和发帖一起失败。
+            tieba.baidu.com:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+            c.tieba.baidu.com:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
         UILaunchStoryboardName: LaunchScreen
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
     settings:
