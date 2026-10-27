@@ -96,7 +96,7 @@ struct ThreadListView: View {
                         ThreadDetailView(thread: thread, forumId: forumId, forumName: forumName)
                     } label: {
                         HStack(alignment: .top, spacing: 12) {
-                            avatar(for: thread.authorName)
+                            AvatarView(name: thread.authorName, portrait: thread.authorPortrait)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(thread.title.isEmpty ? "(无标题)" : thread.title)
                                     .lineLimit(2)
@@ -146,18 +146,6 @@ struct ThreadListView: View {
                 ProgressView()
             }
         }
-    }
-
-    // 头像：没有头像接口时用作者名首字 + 固定色盘，保证每行都有圆头像。
-    private func avatar(for name: String) -> some View {
-        let palette: [Color] = [.orange, .blue, .green, .purple, .pink, .teal, .red, .brown]
-        let hash = name.unicodeScalars.reduce(0) { $0 + Int($1.value) }
-        let initial = name.isEmpty ? "?" : String(name.prefix(1))
-        return Text(initial)
-            .font(.headline)
-            .foregroundStyle(.white)
-            .frame(width: 44, height: 44)
-            .background(Circle().fill(palette[abs(hash) % palette.count].opacity(0.8)))
     }
 
     private func reload() {

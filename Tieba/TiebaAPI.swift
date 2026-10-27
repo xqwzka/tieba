@@ -69,9 +69,10 @@ struct ForumInfo: Decodable {
 struct AuthorInfo: Decodable {
     let id: String
     let name: String
+    let portrait: String
 
     enum CodingKeys: String, CodingKey {
-        case id, name, userName = "user_name", userId = "user_id", uid, nickname, showNickname = "show_nickname", nameShow = "name_show"
+        case id, name, userName = "user_name", userId = "user_id", uid, nickname, showNickname = "show_nickname", nameShow = "name_show", portrait
     }
 
     init(from decoder: Decoder) throws {
@@ -89,6 +90,9 @@ struct AuthorInfo: Decodable {
         let nickname = container.flexibleString(forKey: .nickname)
         let showNickname = container.flexibleString(forKey: .showNickname)
         self.name = [name, nameShow, userName, nickname, showNickname].first { !$0.isEmpty } ?? ""
+        // 头像：user_list 里的 portrait（如 tb.1.xxx），头像地址是
+        // https://tb.himg.baidu.com/sys/portrait/item/<portrait>。
+        self.portrait = container.flexibleString(forKey: .portrait)
     }
 }
 
@@ -101,6 +105,7 @@ struct TiebaThread: Identifiable, Decodable {
     let title: String
     var authorName: String
     var authorId: String
+    var authorPortrait: String
     let replyNum: Int
     let viewNum: Int
     let createTime: Int
@@ -124,15 +129,18 @@ struct TiebaThread: Identifiable, Decodable {
         title = container.flexibleString(forKey: .title)
         var authorName = "未知用户"
         var authorId = container.flexibleString(forKey: .authorId)
+        var authorPortrait = ""
         if let author = try? container.decode(AuthorInfo.self, forKey: .author) {
             if !author.name.isEmpty { authorName = author.name }
             if !author.id.isEmpty { authorId = author.id }
+            authorPortrait = author.portrait
         } else if let name = try? container.decode(String.self, forKey: .author),
                   !name.isEmpty {
             authorName = name
         }
         self.authorName = authorName
         self.authorId = authorId
+        self.authorPortrait = authorPortrait
         replyNum = container.flexibleInt(forKey: .replyNum)
         viewNum = container.flexibleInt(forKey: .viewNum)
         let createTime = container.flexibleInt(forKey: .createTime)
@@ -199,6 +207,7 @@ struct TiebaPost: Identifiable, Decodable {
     let floor: Int
     var authorName: String
     var authorId: String
+    var authorPortrait: String
     let time: Int
     let content: [ContentFragment]
     let subPostCount: Int
@@ -221,6 +230,7 @@ struct TiebaPost: Identifiable, Decodable {
         self.floor = floor
         self.authorName = authorName
         self.authorId = authorId
+        self.authorPortrait = ""
         self.time = time
         self.content = content
         self.subPostCount = subPostCount
@@ -232,15 +242,18 @@ struct TiebaPost: Identifiable, Decodable {
         floor = container.flexibleInt(forKey: .floor)
         var authorName = "未知用户"
         var authorId = container.flexibleString(forKey: .authorId)
+        var authorPortrait = ""
         if let author = try? container.decode(AuthorInfo.self, forKey: .author) {
             if !author.name.isEmpty { authorName = author.name }
             if !author.id.isEmpty { authorId = author.id }
+            authorPortrait = author.portrait
         } else if let name = try? container.decode(String.self, forKey: .author),
                   !name.isEmpty {
             authorName = name
         }
         self.authorName = authorName
         self.authorId = authorId
+        self.authorPortrait = authorPortrait
         time = container.flexibleInt(forKey: .time)
         // content 可能是片段数组，也可能是纯字符串，两种都接。
         if let fragments = try? container.decode([ContentFragment].self, forKey: .content) {
@@ -465,15 +478,20 @@ final class TiebaClient {
         let resolvedForumName = response.forum?.name ?? ""
         var threads = response.threadList ?? []
         // 作者可能不在 thread 里、而在单独的 user_list 里按 author_id 映射。
+        // 用户名和头像一起映射：头像缺了，列表就只能显示首字。
         if let users = response.userList, !users.isEmpty {
-            let byId = Dictionary(uniqueKeysWithValues: users.compactMap { user -> (String, String)? in
-                guard !user.id.isEmpty, !user.name.isEmpty else { return nil }
-                return (user.id, user.name)
+            let byId = Dictionary(uniqueKeysWithValues: users.compactMap { user -> (String, AuthorInfo)? in
+                guard !user.id.isEmpty else { return nil }
+                return (user.id, user)
             })
             for index in threads.indices {
-                if (threads[index].authorName == "未知用户" || threads[index].authorName.isEmpty),
-                   let name = byId[threads[index].authorId] {
-                    threads[index].authorName = name
+                guard let user = byId[threads[index].authorId] else { continue }
+                if threads[index].authorName == "未知用户" || threads[index].authorName.isEmpty,
+                   !user.name.isEmpty {
+                    threads[index].authorName = user.name
+                }
+                if threads[index].authorPortrait.isEmpty {
+                    threads[index].authorPortrait = user.portrait
                 }
             }
         }
@@ -503,18 +521,38 @@ final class TiebaClient {
                 let response = try decode(data, as: PbResponse.self)
                 var posts = response.postList ?? []
                 if let users = response.userList, !users.isEmpty {
-                    let byId = Dictionary(uniqueKeysWithValues: users.compactMap { user -> (String, String)? in
-                        guard !user.id.isEmpty, !user.name.isEmpty else { return nil }
-                        return (user.id, user.name)
+                    let byId = Dictionary(uniqueKeysWithValues: users.compactMap { user -> (String, AuthorInfo)? in
+                        guard !user.id.isEmpty else { return nil }
+                        return (user.id, user)
                     })
                     for index in posts.indices {
-                        if (posts[index].authorName == "未知用户" || posts[index].authorName.isEmpty),
-                           let name = byId[posts[index].authorId] {
-                            posts[index].authorName = name
+                        guard let user = byId[posts[index].authorId] else { continue }
+                        if posts[index].authorName == "未知用户" || posts[index].authorName.isEmpty,
+                           !user.name.isEmpty {
+                            posts[index].authorName = user.name
+                        }
+                        if posts[index].authorPortrait.isEmpty {
+                            posts[index].authorPortrait = user.portrait
                         }
                     }
                 }
                 return posts
+            } catch {
+                lastError = error
+            }
+        }
+        // GET 全部失败时再试一次 POST：部分客户端接口只接受 POST 形式，
+        // 参数与 GET 的第二组相同（rn + with_floor）。
+        if page == 1 {
+            do {
+                let data = try await request(
+                    path: "/c/f/pb/page",
+                    params: ["tid": tid, "pn": "1", "rn": "30", "with_floor": "1"],
+                    method: "POST")
+                let response = try decode(data, as: PbResponse.self)
+                if let posts = response.postList, !posts.isEmpty {
+                    return posts
+                }
             } catch {
                 lastError = error
             }
@@ -626,6 +664,44 @@ final class TiebaClient {
             } catch {
                 continue
             }
+        }
+        // 客户端接口返回空时，改走网页版“我的吧”页面：吧链接形如 /f?kw=吧名，
+        // 从链接里直接取吧名，不依赖客户端接口的字段名。
+        if let webNames = try? await fetchFollowedForumsFromWeb(), !webNames.isEmpty {
+            return webNames
+        }
+        return []
+    }
+
+    private func fetchFollowedForumsFromWeb() async throws -> [String] {
+        let urls = [
+            "https://tieba.baidu.com/i/i/my_forum",
+            "https://tieba.baidu.com/f/like/mylike",
+        ]
+        for urlString in urls {
+            guard let url = URL(string: urlString) else { continue }
+            var urlRequest = URLRequest(url: url)
+            urlRequest.setValue(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+                forHTTPHeaderField: "User-Agent")
+            if let cookie = cookieHeader {
+                urlRequest.setValue(cookie, forHTTPHeaderField: "Cookie")
+            }
+            guard let (data, _) = try? await URLSession.shared.data(for: urlRequest),
+                  let html = String(data: data, encoding: .utf8) else { continue }
+            let raw = matches(in: html, pattern: "/f\\?kw=([^\"&<>]+)")
+            var seen = Set<String>()
+            var result: [String] = []
+            for item in raw {
+                let name = item.removingPercentEncoding?.replacingOccurrences(of: "+", with: " ")
+                    ?? item
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty, !seen.contains(trimmed) {
+                    seen.insert(trimmed)
+                    result.append(trimmed)
+                }
+            }
+            if !result.isEmpty { return result }
         }
         return []
     }

@@ -16,6 +16,7 @@ struct ThreadDetailView: View {
     @State private var isSubmittingReply = false
     @State private var onlyLandlord = false
     @State private var showLoginAlert = false
+    @State private var showWebDetail = false
 
     // 只看楼主：优先按作者 id 过滤（用户名可能昵称/用户名混用），id 为空时退回按作者名。
     private var visiblePosts: [TiebaPost] {
@@ -59,6 +60,10 @@ struct ThreadDetailView: View {
                 if visiblePosts.isEmpty && !isLoading {
                     Text(onlyLandlord ? "楼主暂无发言" : "暂无楼层")
                         .foregroundStyle(.secondary)
+                    // 原生接口拿不到楼层时，直接用官方网页版看：楼层、作者、头像都在。
+                    Button("用网页版打开这条帖子") {
+                        showWebDetail = true
+                    }
                 }
                 ForEach(visiblePosts) { post in
                     PostRow(post: post, tid: thread.tid, forumId: forumId, forumName: forumName)
@@ -83,6 +88,16 @@ struct ThreadDetailView: View {
             .padding()
         }
         .navigationTitle(thread.title.isEmpty ? "帖子详情" : thread.title)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("网页版") {
+                    showWebDetail = true
+                }
+            }
+        }
+        .sheet(isPresented: $showWebDetail) {
+            WebDetailView(tid: thread.tid)
+        }
         .alert("请先登录", isPresented: $showLoginAlert) {
             Button("好", role: .cancel) {}
         } message: {
@@ -184,14 +199,7 @@ struct PostRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                // 与列表同款头像首字，楼层也一眼看出是谁。
-                let palette: [Color] = [.orange, .blue, .green, .purple, .pink, .teal, .red, .brown]
-                let hash = post.authorName.unicodeScalars.reduce(0) { $0 + Int($1.value) }
-                Text(post.authorName.isEmpty ? "?" : String(post.authorName.prefix(1)))
-                    .font(.footnote.bold())
-                    .foregroundStyle(.white)
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(palette[abs(hash) % palette.count].opacity(0.8)))
+                AvatarView(name: post.authorName, portrait: post.authorPortrait, size: 32)
                 Text(post.authorName)
                     .font(.subheadline.bold())
                 Spacer()
