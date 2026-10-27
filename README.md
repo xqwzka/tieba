@@ -14,9 +14,10 @@ iOS 17、SwiftUI、无第三方依赖、XcodeGen 构建。只做四件事：扫�
 | 接口 | 状态 | 依据 |
 | --- | --- | --- |
 | 帖子列表 frs | 通过 | 带签名请求返回 thread_list，作者靠 user_list 按 author_id 映射（name_show） |
-| 帖子详情 pb（客户端） | 通过（匿名只读） | 2026-10-27 实测：根因是之前发 tid 参数服务端不认；改 kz=帖子 id 后匿名返回 error_code 0、post_list 15 条，首楼作者经 user_list 映射为“萌酱”，与网页版一致；登录后真机仍待确认 |
+| 帖子详情 pb（客户端） | 通过（匿名只读） | 2026-10-27 实测：根因是之前发 tid 参数服务端不认；改 kz=帖子 id 后匿名返回 error_code 0、post_list 15 条，首楼作者经 user_list 映射为“萌酱”，与网页版一致；登录后真机仍待确认。翻页注意：rn=30 时 pn 翻页不生效（第 2、3 页都返回从 1 楼起的全部楼层），必须用 rn=15（第 1 页 1~15 楼，第 2 页 16~19 楼），另有按 pid 去重兜底 |
 | 网页版帖子页 | 通过 | 官方页面能看到楼层、作者、头像、回复数 |
-| 关注的吧 forum/like | 匿名不通过 | 匿名返回空，无吧名；登录后未验证通过，另有网页版我的吧导入兜底 |
+| 关注的吧 forum/like | 按 TiebaLite 改为 POST page_no/page_size + BDUSS 当请求参数 | 之前 GET pn=1 + 只认 fname/forum_name，且 BDUSS 只放 Cookie，导致登录后也为空；改后登录后真机仍待确认，另有网页版我的吧导入兜底 |
+| 头像 portrait | 按原值拼 himg 地址，带 Referer 取图，https 失败试 http | portrait 实测带 ?t= 后缀，已剥掉；直接请求在浏览器里 https 报证书名不匹配、http 为空白错误页，网页版里头像正常显示，故 App 内改用带 Referer 的 URLSession 取图，不再用 AsyncImage |
 | 网页扫码登录 | 通过（真机） | 用户已用网页扫码登录成功 |
 | 原生扫码登录 | 未验证通过 | 初版真机报解析失败，后续修复未确认 |
 | 发帖/回复/tbs | 未验证通过 | 需要登录态，未在真机验证通过 |

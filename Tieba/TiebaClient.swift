@@ -32,6 +32,14 @@ final class TiebaClient {
 
     private func signedParams(_ params: [String: String]) -> [String: String] {
         var signed = params
+        // TiebaLite 的做法：BDUSS/STOKEN 是请求参数，不是只放 Cookie；
+        // 只放 Cookie 时需要登录态的客户端接口（如关注的吧）认不出登录用户。
+        if let bduss = KeychainStore.bduss, !bduss.isEmpty {
+            signed["BDUSS"] = bduss
+        }
+        if let stoken = KeychainStore.stoken, !stoken.isEmpty {
+            signed["STOKEN"] = stoken
+        }
         signed["_client_type"] = "2"
         signed["_client_version"] = clientVersion
         signed["sign"] = Self.sign(signed)
@@ -192,10 +200,12 @@ final class TiebaClient {
         if let (at, cached) = postsCache[cacheKey], Date().timeIntervalSince(at) < 60 {
             return cached
         }
-        // 第一组就是实测通过的参数；第二组是 TiebaLite 老 JSON 详情的完整参数（POST 表单），作兜底。
+        // 实测结论：rn=30 时服务端翻页不生效，pn=2、pn=3 都返回从 1 楼起的全部楼层，
+        // 所以“加载更多”会把已看过的楼层再贴一遍；rn=15 时 pn 正常工作
+        //（第 1 页 1~15 楼，第 2 页 16~19 楼），和 TiebaLite 的 rn=15 一致。必须用 15。
         let attempts: [(method: String, params: [String: String])] = [
-            ("GET", ["kz": tid, "pn": String(page), "rn": "30", "with_floor": "1"]),
-            ("POST", ["kz": tid, "pn": String(page), "rn": "30", "with_floor": "1",
+            ("GET", ["kz": tid, "pn": String(page), "rn": "15", "with_floor": "1"]),
+            ("POST", ["kz": tid, "pn": String(page), "rn": "15", "with_floor": "1",
                       "st_type": "tb_frslist", "back": "0", "floor_rn": "3", "mark": "0", "lz": "0"]),
         ]
         var lastError: Error = TiebaError.invalidResponse
@@ -240,7 +250,17 @@ final class TiebaClient {
 
     func fetchFollowedForums() async throws -> [String] {
         guard KeychainStore.isLoggedIn else { return [] }
-        for path in ["/c/f/forum/like", "/c/f/user/like", "/c/f/forum/fav"] {
+        // TiebaLite 的写法：POST /c/f/forum/like，page_no/page_size，不是 GET pn；
+        // 返回结构是 forum_list["non-gconforum"][].name（另有 common_forum_list 同结构）。
+        // 之前 GET pn=1 + 只认 fname/forum_name，所以登录后也一直是空。
+        do {
+            let data = try await request(path: "/c/f/forum/like", params: ["page_no": "1", "page_size": "50"], method: "POST")
+            let names = followedForumNames(in: data)
+            if !names.isEmpty { return names }
+        } catch {
+            // 落到下面的兜底
+        }
+        for path in ["/c/f/user/like", "/c/f/forum/fav"] {
             do {
                 let data = try await request(path: path, params: ["pn": "1"], method: "GET")
                 let names = forumNames(in: data)
@@ -253,6 +273,28 @@ final class TiebaClient {
             return webNames
         }
         return []
+    }
+
+    private func followedForumNames(in data: Data) -> [String] {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
+        var seen = Set<String>()
+        var result: [String] = []
+        for listKey in ["forum_list", "common_forum_list"] {
+            guard let list = object[listKey] as? [String: Any] else { continue }
+            for group in list.values {
+                guard let forums = group as? [[String: Any]] else { continue }
+                for forum in forums {
+                    if let name = forum["name"] as? String, !name.isEmpty, !seen.contains(name) {
+                        seen.insert(name)
+                        result.append(name)
+                    }
+                }
+            }
+        }
+        if result.isEmpty {
+            result = forumNames(in: data)
+        }
+        return result
     }
 
     private func fetchFollowedForumsFromWeb() async throws -> [String] {

@@ -132,7 +132,10 @@ struct ThreadDetailView: View {
                 if replace {
                     posts = fetched
                 } else {
-                    posts.append(contentsOf: fetched)
+                    // 按 pid 去重：服务端翻页偶尔会把上一页的楼层再返回一遍，
+                    // 不去重就会出现“加载更多后很多重复内容”。
+                    let existing = Set(posts.map { $0.pid })
+                    posts.append(contentsOf: fetched.filter { !existing.contains($0.pid) })
                 }
                 if fetched.isEmpty {
                     noMore = true
@@ -276,7 +279,8 @@ struct PostRow: View {
                 if replace {
                     subPosts = fetched
                 } else {
-                    subPosts.append(contentsOf: fetched)
+                    let existing = Set(subPosts.map { $0.pid })
+                    subPosts.append(contentsOf: fetched.filter { !existing.contains($0.pid) })
                 }
                 if fetched.isEmpty {
                     subNoMore = true

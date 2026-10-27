@@ -13,6 +13,12 @@ targets:
       properties:
         CFBundleDisplayName: 贴吧
         CFBundleVersion: "1"
+        # 头像 http 兜底需要：否则 iOS 默认禁明文 http，头像 https 失败时 http 备选也发不出去。
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            tb.himg.baidu.com:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
         UILaunchStoryboardName: LaunchScreen
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
     settings:
