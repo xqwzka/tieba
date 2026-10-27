@@ -57,11 +57,16 @@ struct LoginView: View {
 
                     Divider()
 
-                    // 备用入口：网页扫码，不喧宾夺主，只放在底部。
-                    Button("网页扫码（备用）") {
+                    // 主入口之一：网页扫码用百度官方登录页自己的二维码，
+                    // 不依赖原生扫码接口的返回格式，原生扫码失败时走这里一定能扫。
+                    Button("网页扫码（百度官方二维码）") {
                         showWebLogin = true
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
+                    Text("网页扫码和原生扫码一样：用百度 App / 贴吧 App 扫码确认，BDUSS 只存本机。")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
 
                     Button("不登录，先逛逛") {
                         showGuestHome = true
